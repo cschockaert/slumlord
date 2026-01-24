@@ -1,0 +1,124 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: slumlordsleepschedules.slumlord.io
+spec:
+  group: slumlord.io
+  names:
+    kind: SlumlordSleepSchedule
+    listKind: SlumlordSleepScheduleList
+    plural: slumlordsleepschedules
+    singular: slumlordsleepschedule
+    shortNames:
+      - sss
+      - sleepschedule
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Sleeping
+          type: boolean
+          jsonPath: .status.sleeping
+        - name: Start
+          type: string
+          jsonPath: .spec.schedule.start
+        - name: End
+          type: string
+          jsonPath: .spec.schedule.end
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: SlumlordSleepSchedule defines a sleep schedule for workloads
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - selector
+                - schedule
+              properties:
+                selector:
+                  type: object
+                  description: Selector specifies which workloads to target
+                  properties:
+                    matchLabels:
+                      type: object
+                      additionalProperties:
+                        type: string
+                      description: MatchLabels selects workloads by labels
+                    matchNames:
+                      type: array
+                      items:
+                        type: string
+                      description: MatchNames selects workloads by name
+                    types:
+                      type: array
+                      items:
+                        type: string
+                        enum:
+                          - Deployment
+                          - StatefulSet
+                          - CronJob
+                      description: Types specifies which workload types to target
+                schedule:
+                  type: object
+                  required:
+                    - start
+                    - end
+                  description: Schedule defines when workloads should sleep
+                  properties:
+                    start:
+                      type: string
+                      pattern: '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
+                      description: Start time in HH:MM format (e.g., "22:00")
+                    end:
+                      type: string
+                      pattern: '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
+                      description: End time in HH:MM format (e.g., "06:00")
+                    timezone:
+                      type: string
+                      description: Timezone (e.g., "Europe/Paris", "UTC")
+                    days:
+                      type: array
+                      items:
+                        type: integer
+                        minimum: 0
+                        maximum: 6
+                      description: Days of week (0=Sunday, 6=Saturday). Empty means every day.
+            status:
+              type: object
+              properties:
+                sleeping:
+                  type: boolean
+                  description: Whether workloads are currently sleeping
+                lastTransitionTime:
+                  type: string
+                  format: date-time
+                  description: Last time the sleep state changed
+                managedWorkloads:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      kind:
+                        type: string
+                      name:
+                        type: string
+                      originalReplicas:
+                        type: integer
+                        format: int32
+                      originalSuspend:
+                        type: boolean
+                  description: Workloads currently managed by this schedule

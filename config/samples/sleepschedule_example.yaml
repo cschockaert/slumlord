@@ -1,0 +1,19 @@
+# Example: Sleep all deployments with label "slumlord.io/managed=true" from 22:00 to 06:00 Paris time
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordSleepSchedule
+metadata:
+  name: nightly-sleep
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - Deployment
+      - StatefulSet
+  schedule:
+    start: "22:00"
+    end: "06:00"
+    timezone: "Europe/Paris"
+    # Only on weekdays (Monday-Friday)
+    days: [1, 2, 3, 4, 5]
