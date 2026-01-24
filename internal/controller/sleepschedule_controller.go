@@ -6,6 +6,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -55,7 +56,7 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 
 		// Update status
-		now := ctrl.Now()
+		now := metav1.Now()
 		schedule.Status.Sleeping = shouldSleep
 		schedule.Status.LastTransitionTime = &now
 		if err := r.Status().Update(ctx, &schedule); err != nil {
