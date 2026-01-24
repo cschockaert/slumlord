@@ -1,0 +1,26 @@
+run:
+  timeout: 5m
+  go: "1.22"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  disable:
+    - typecheck  # Disable due to issues with controller-runtime embedded interfaces
+
+linters-settings:
+  errcheck:
+    check-type-assertions: false
+  govet:
+    shadow: false
+
+issues:
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - errcheck
