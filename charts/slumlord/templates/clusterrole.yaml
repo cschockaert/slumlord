@@ -1,0 +1,88 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "slumlord.fullname" . }}-manager
+  labels:
+    {{- include "slumlord.labels" . | nindent 4 }}
+rules:
+  # SlumlordSleepSchedule resources
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordsleepschedules
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordsleepschedules/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordsleepschedules/finalizers
+    verbs:
+      - update
+  # Deployments
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  # StatefulSets
+  - apiGroups:
+      - apps
+    resources:
+      - statefulsets
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  # CronJobs
+  - apiGroups:
+      - batch
+    resources:
+      - cronjobs
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  # Leader election
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  # Events
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch

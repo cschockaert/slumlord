@@ -1,0 +1,14 @@
+apiVersion: v2
+name: slumlord
+description: A Helm chart for Slumlord - Kubernetes operator for cost optimization
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kubernetes
+  - operator
+  - cost-optimization
+  - sleep-schedule
+home: https://github.com/cschockaert/slumlord
+maintainers:
+  - name: cschockaert
