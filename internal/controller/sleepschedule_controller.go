@@ -69,6 +69,11 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 // shouldBeSleeping determines if workloads should be sleeping based on the schedule
 func (r *SleepScheduleReconciler) shouldBeSleeping(schedule *slumlordv1alpha1.SlumlordSleepSchedule) bool {
+	return r.shouldBeSleepingAt(schedule, time.Now())
+}
+
+// shouldBeSleepingAt determines if workloads should be sleeping at a specific time
+func (r *SleepScheduleReconciler) shouldBeSleepingAt(schedule *slumlordv1alpha1.SlumlordSleepSchedule, t time.Time) bool {
 	loc := time.UTC
 	if schedule.Spec.Schedule.Timezone != "" {
 		if l, err := time.LoadLocation(schedule.Spec.Schedule.Timezone); err == nil {
@@ -76,7 +81,7 @@ func (r *SleepScheduleReconciler) shouldBeSleeping(schedule *slumlordv1alpha1.Sl
 		}
 	}
 
-	now := time.Now().In(loc)
+	now := t.In(loc)
 
 	// Check if today is in the allowed days
 	if len(schedule.Spec.Schedule.Days) > 0 {
