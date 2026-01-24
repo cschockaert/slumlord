@@ -349,7 +349,7 @@ var _ = Describe("SleepScheduleReconciler", func() {
 	})
 })
 
-func TestMain(m *testing.M) {
+func TestControllerSuite(t *testing.T) {
 	RegisterFailHandler(Fail)
-	m.Run()
+	RunSpecs(t, "Controller Suite")
 }
