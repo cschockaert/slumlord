@@ -1,0 +1,37 @@
+Slumlord has been installed!
+
+1. Verify the operator is running:
+
+   kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "slumlord.name" . }}
+
+2. Create a SlumlordSleepSchedule to put workloads to sleep:
+
+   cat <<EOF | kubectl apply -f -
+   apiVersion: slumlord.io/v1alpha1
+   kind: SlumlordSleepSchedule
+   metadata:
+     name: nightly-sleep
+     namespace: default
+   spec:
+     selector:
+       matchLabels:
+         slumlord.io/managed: "true"
+       types:
+         - Deployment
+         - StatefulSet
+     schedule:
+       start: "22:00"
+       end: "06:00"
+       timezone: "UTC"
+       days: [1, 2, 3, 4, 5]  # Weekdays only
+   EOF
+
+3. Label workloads you want to manage:
+
+   kubectl label deployment my-app slumlord.io/managed=true
+
+4. Check sleep schedules:
+
+   kubectl get slumlordsleepschedules -A
+
+For more information, visit: https://github.com/cschockaert/slumlord
