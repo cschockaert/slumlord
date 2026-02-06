@@ -8,8 +8,11 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -178,6 +181,22 @@ func newTestScheme() *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(slumlordv1alpha1.AddToScheme(s))
 	return s
+}
+
+func newCustomRESTMapper() meta.RESTMapper {
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{
+		{Group: "", Version: "v1"},
+		{Group: "apps", Version: "v1"},
+		{Group: "batch", Version: "v1"},
+		{Group: "slumlord.io", Version: "v1alpha1"},
+		{Group: "postgresql.cnpg.io", Version: "v1"},
+		{Group: "helm.toolkit.fluxcd.io", Version: "v2"},
+		{Group: "kustomize.toolkit.fluxcd.io", Version: "v1"},
+	})
+	mapper.Add(schema.GroupVersionKind{Group: "postgresql.cnpg.io", Version: "v1", Kind: "Cluster"}, meta.RESTScopeNamespace)
+	mapper.Add(schema.GroupVersionKind{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"}, meta.RESTScopeNamespace)
+	mapper.Add(schema.GroupVersionKind{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Kind: "Kustomization"}, meta.RESTScopeNamespace)
+	return mapper
 }
 
 func TestReconcile_ScalesDownDeployment(t *testing.T) {
@@ -356,5 +375,317 @@ func TestReconcile_SuspendsCronJob(t *testing.T) {
 	}
 	if !*updatedCJ.Spec.Suspend {
 		t.Error("Expected cronjob to be suspended")
+	}
+}
+
+func TestReconcile_HibernatesCNPGCluster(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// Create CNPG cluster as unstructured
+	cluster := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "postgresql.cnpg.io/v1",
+			"kind":       "Cluster",
+			"metadata": map[string]interface{}{
+				"name":      "test-pg-cluster",
+				"namespace": namespace,
+				"labels": map[string]interface{}{
+					"app": "test",
+				},
+			},
+			"spec": map[string]interface{}{
+				"instances": int64(3),
+			},
+		},
+	}
+
+	// Create sleep schedule targeting CNPG Clusters
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-schedule",
+			Namespace: namespace,
+		},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Cluster"},
+			},
+			Schedule: slumlordv1alpha1.SleepWindow{
+				Start:    "00:00",
+				End:      "23:59",
+				Timezone: "UTC",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(newCustomRESTMapper()).
+		WithObjects(cluster, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	reconciler := &SleepScheduleReconciler{
+		Client: fakeClient,
+		Scheme: scheme,
+	}
+
+	// Reconcile
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      schedule.Name,
+			Namespace: schedule.Namespace,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	// Verify cluster has hibernation annotation
+	updatedCluster := &unstructured.Unstructured{}
+	updatedCluster.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "postgresql.cnpg.io",
+		Version: "v1",
+		Kind:    "Cluster",
+	})
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-pg-cluster", Namespace: namespace}, updatedCluster); err != nil {
+		t.Fatalf("Failed to get CNPG cluster: %v", err)
+	}
+
+	annotations := updatedCluster.GetAnnotations()
+	if annotations == nil || annotations["cnpg.io/hibernation"] != "on" {
+		t.Errorf("Expected cnpg.io/hibernation=on annotation, got %v", annotations)
+	}
+
+	// Verify status updated
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if !updatedSchedule.Status.Sleeping {
+		t.Error("Expected status.sleeping = true")
+	}
+	if len(updatedSchedule.Status.ManagedWorkloads) != 1 {
+		t.Errorf("Expected 1 managed workload, got %d", len(updatedSchedule.Status.ManagedWorkloads))
+	}
+	if updatedSchedule.Status.ManagedWorkloads[0].Kind != "Cluster" {
+		t.Errorf("Expected managed workload kind = Cluster, got %s", updatedSchedule.Status.ManagedWorkloads[0].Kind)
+	}
+}
+
+func TestReconcile_SuspendsFluxHelmRelease(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// Create FluxCD HelmRelease as unstructured
+	hr := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "helm.toolkit.fluxcd.io/v2",
+			"kind":       "HelmRelease",
+			"metadata": map[string]interface{}{
+				"name":      "test-helmrelease",
+				"namespace": namespace,
+				"labels": map[string]interface{}{
+					"app": "test",
+				},
+			},
+			"spec": map[string]interface{}{
+				"interval": "5m",
+				"chart": map[string]interface{}{
+					"spec": map[string]interface{}{
+						"chart":   "my-chart",
+						"version": "1.0.0",
+					},
+				},
+				"suspend": false,
+			},
+		},
+	}
+
+	// Create sleep schedule targeting HelmRelease
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-schedule",
+			Namespace: namespace,
+		},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"HelmRelease"},
+			},
+			Schedule: slumlordv1alpha1.SleepWindow{
+				Start:    "00:00",
+				End:      "23:59",
+				Timezone: "UTC",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(newCustomRESTMapper()).
+		WithObjects(hr, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	reconciler := &SleepScheduleReconciler{
+		Client: fakeClient,
+		Scheme: scheme,
+	}
+
+	// Reconcile
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      schedule.Name,
+			Namespace: schedule.Namespace,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	// Verify HelmRelease is suspended
+	updatedHR := &unstructured.Unstructured{}
+	updatedHR.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "helm.toolkit.fluxcd.io",
+		Version: "v2",
+		Kind:    "HelmRelease",
+	})
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-helmrelease", Namespace: namespace}, updatedHR); err != nil {
+		t.Fatalf("Failed to get HelmRelease: %v", err)
+	}
+
+	spec, ok := updatedHR.Object["spec"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected spec to be a map")
+	}
+	suspend, ok := spec["suspend"].(bool)
+	if !ok || !suspend {
+		t.Errorf("Expected spec.suspend = true, got %v", spec["suspend"])
+	}
+
+	// Verify status
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if !updatedSchedule.Status.Sleeping {
+		t.Error("Expected status.sleeping = true")
+	}
+	if len(updatedSchedule.Status.ManagedWorkloads) != 1 {
+		t.Errorf("Expected 1 managed workload, got %d", len(updatedSchedule.Status.ManagedWorkloads))
+	}
+	if updatedSchedule.Status.ManagedWorkloads[0].Kind != "HelmRelease" {
+		t.Errorf("Expected kind = HelmRelease, got %s", updatedSchedule.Status.ManagedWorkloads[0].Kind)
+	}
+}
+
+func TestReconcile_SuspendsFluxKustomization(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// Create FluxCD Kustomization as unstructured
+	ks := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+			"kind":       "Kustomization",
+			"metadata": map[string]interface{}{
+				"name":      "test-kustomization",
+				"namespace": namespace,
+				"labels": map[string]interface{}{
+					"app": "test",
+				},
+			},
+			"spec": map[string]interface{}{
+				"interval": "10m",
+				"path":     "./clusters/production",
+				"sourceRef": map[string]interface{}{
+					"kind": "GitRepository",
+					"name": "flux-system",
+				},
+				"suspend": false,
+			},
+		},
+	}
+
+	// Create sleep schedule targeting Kustomization
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-schedule",
+			Namespace: namespace,
+		},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Kustomization"},
+			},
+			Schedule: slumlordv1alpha1.SleepWindow{
+				Start:    "00:00",
+				End:      "23:59",
+				Timezone: "UTC",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(newCustomRESTMapper()).
+		WithObjects(ks, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	reconciler := &SleepScheduleReconciler{
+		Client: fakeClient,
+		Scheme: scheme,
+	}
+
+	// Reconcile
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      schedule.Name,
+			Namespace: schedule.Namespace,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	// Verify Kustomization is suspended
+	updatedKS := &unstructured.Unstructured{}
+	updatedKS.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "kustomize.toolkit.fluxcd.io",
+		Version: "v1",
+		Kind:    "Kustomization",
+	})
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-kustomization", Namespace: namespace}, updatedKS); err != nil {
+		t.Fatalf("Failed to get Kustomization: %v", err)
+	}
+
+	spec, ok := updatedKS.Object["spec"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected spec to be a map")
+	}
+	suspend, ok := spec["suspend"].(bool)
+	if !ok || !suspend {
+		t.Errorf("Expected spec.suspend = true, got %v", spec["suspend"])
+	}
+
+	// Verify status
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if !updatedSchedule.Status.Sleeping {
+		t.Error("Expected status.sleeping = true")
+	}
+	if len(updatedSchedule.Status.ManagedWorkloads) != 1 {
+		t.Errorf("Expected 1 managed workload, got %d", len(updatedSchedule.Status.ManagedWorkloads))
+	}
+	if updatedSchedule.Status.ManagedWorkloads[0].Kind != "Kustomization" {
+		t.Errorf("Expected kind = Kustomization, got %s", updatedSchedule.Status.ManagedWorkloads[0].Kind)
 	}
 }

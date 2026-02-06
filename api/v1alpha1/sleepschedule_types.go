@@ -24,7 +24,7 @@ type WorkloadSelector struct {
 	MatchNames []string `json:"matchNames,omitempty"`
 
 	// Types specifies which workload types to target
-	// Valid values: Deployment, StatefulSet, CronJob
+	// Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization
 	// +optional
 	Types []string `json:"types,omitempty"`
 }
@@ -63,7 +63,7 @@ type SlumlordSleepScheduleStatus struct {
 
 // ManagedWorkload tracks a workload managed by this schedule
 type ManagedWorkload struct {
-	// Kind is the workload kind (Deployment, StatefulSet, CronJob)
+	// Kind is the workload kind (Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization)
 	Kind string `json:"kind"`
 
 	// Name is the workload name
@@ -73,9 +73,13 @@ type ManagedWorkload struct {
 	// +optional
 	OriginalReplicas *int32 `json:"originalReplicas,omitempty"`
 
-	// OriginalSuspend stores the suspend state before sleeping (for CronJob)
+	// OriginalSuspend stores the suspend state before sleeping (for CronJob, HelmRelease, Kustomization)
 	// +optional
 	OriginalSuspend *bool `json:"originalSuspend,omitempty"`
+
+	// OriginalHibernation stores the hibernation annotation value before sleeping (for CNPG Cluster)
+	// +optional
+	OriginalHibernation *string `json:"originalHibernation,omitempty"`
 }
 
 // +kubebuilder:object:root=true

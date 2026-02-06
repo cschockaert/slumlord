@@ -1,4 +1,4 @@
-# Example: Sleep all deployments with label "slumlord.io/managed=true" from 22:00 to 06:00 Paris time
+# Example: Sleep all managed workloads from 22:00 to 06:00 Paris time on weekdays
 apiVersion: slumlord.io/v1alpha1
 kind: SlumlordSleepSchedule
 metadata:
@@ -11,9 +11,71 @@ spec:
     types:
       - Deployment
       - StatefulSet
+      - CronJob
+      - Cluster
+      - HelmRelease
+      - Kustomization
   schedule:
     start: "22:00"
     end: "06:00"
     timezone: "Europe/Paris"
     # Only on weekdays (Monday-Friday)
+    days: [1, 2, 3, 4, 5]
+---
+# Example: Suspend only CronJobs during weekends
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordSleepSchedule
+metadata:
+  name: weekend-cronjob-suspend
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - CronJob
+  schedule:
+    start: "00:00"
+    end: "23:59"
+    timezone: "Europe/Paris"
+    # Saturday and Sunday
+    days: [0, 6]
+---
+# Example: Hibernate CNPG PostgreSQL clusters during off-hours
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordSleepSchedule
+metadata:
+  name: nightly-pg-hibernate
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - Cluster
+  schedule:
+    start: "20:00"
+    end: "07:00"
+    timezone: "Europe/Paris"
+    days: [1, 2, 3, 4, 5]
+---
+# Example: Suspend FluxCD reconciliation during off-hours
+# IMPORTANT: Use this alongside workload sleep schedules to prevent
+# Flux from restoring scaled-down workloads during sleep windows
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordSleepSchedule
+metadata:
+  name: nightly-flux-suspend
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - HelmRelease
+      - Kustomization
+  schedule:
+    start: "21:55"
+    end: "06:05"
+    timezone: "Europe/Paris"
     days: [1, 2, 3, 4, 5]
