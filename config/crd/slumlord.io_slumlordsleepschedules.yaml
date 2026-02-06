@@ -1,6 +1,9 @@
+---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
   name: slumlordsleepschedules.slumlord.io
 spec:
   group: slumlord.io
@@ -9,116 +12,144 @@ spec:
     listKind: SlumlordSleepScheduleList
     plural: slumlordsleepschedules
     singular: slumlordsleepschedule
-    shortNames:
-      - sss
-      - sleepschedule
   scope: Namespaced
   versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      additionalPrinterColumns:
-        - name: Sleeping
-          type: boolean
-          jsonPath: .status.sleeping
-        - name: Start
-          type: string
-          jsonPath: .spec.schedule.start
-        - name: End
-          type: string
-          jsonPath: .spec.schedule.end
-        - name: Age
-          type: date
-          jsonPath: .metadata.creationTimestamp
-      schema:
-        openAPIV3Schema:
-          type: object
-          description: SlumlordSleepSchedule defines a sleep schedule for workloads
-          properties:
-            apiVersion:
-              type: string
-            kind:
-              type: string
-            metadata:
-              type: object
-            spec:
-              type: object
-              required:
-                - selector
-                - schedule
-              properties:
-                selector:
-                  type: object
-                  description: Selector specifies which workloads to target
-                  properties:
-                    matchLabels:
-                      type: object
-                      additionalProperties:
-                        type: string
-                      description: MatchLabels selects workloads by labels
-                    matchNames:
-                      type: array
-                      items:
-                        type: string
-                      description: MatchNames selects workloads by name
-                    types:
-                      type: array
-                      items:
-                        type: string
-                        enum:
-                          - Deployment
-                          - StatefulSet
-                          - CronJob
-                      description: Types specifies which workload types to target
-                schedule:
-                  type: object
-                  required:
-                    - start
-                    - end
-                  description: Schedule defines when workloads should sleep
-                  properties:
-                    start:
+  - additionalPrinterColumns:
+    - jsonPath: .status.sleeping
+      name: Sleeping
+      type: boolean
+    - jsonPath: .spec.schedule.start
+      name: Start
+      type: string
+    - jsonPath: .spec.schedule.end
+      name: End
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SlumlordSleepSchedule is the Schema for the SlumlordSleepSchedules
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SlumlordSleepScheduleSpec defines the desired state of SlumlordSleepSchedule
+            properties:
+              schedule:
+                description: Schedule defines when workloads should sleep
+                properties:
+                  days:
+                    description: |-
+                      Days specifies which days the schedule applies (0=Sunday, 6=Saturday)
+                      If empty, applies every day
+                    items:
+                      type: integer
+                    type: array
+                  end:
+                    description: End is the time to wake up (cron format for time,
+                      e.g., "06:00")
+                    type: string
+                  start:
+                    description: Start is the time to start sleeping (cron format
+                      for time, e.g., "22:00")
+                    type: string
+                  timezone:
+                    description: Timezone is the timezone for the schedule (e.g.,
+                      "Europe/Paris", "UTC")
+                    type: string
+                required:
+                - end
+                - start
+                type: object
+              selector:
+                description: Selector specifies which workloads to target
+                properties:
+                  matchLabels:
+                    additionalProperties:
                       type: string
-                      pattern: '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
-                      description: Start time in HH:MM format (e.g., "22:00")
-                    end:
-                      type: string
-                      pattern: '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
-                      description: End time in HH:MM format (e.g., "06:00")
-                    timezone:
-                      type: string
-                      description: Timezone (e.g., "Europe/Paris", "UTC")
-                    days:
-                      type: array
-                      items:
-                        type: integer
-                        minimum: 0
-                        maximum: 6
-                      description: Days of week (0=Sunday, 6=Saturday). Empty means every day.
-            status:
-              type: object
-              properties:
-                sleeping:
-                  type: boolean
-                  description: Whether workloads are currently sleeping
-                lastTransitionTime:
-                  type: string
-                  format: date-time
-                  description: Last time the sleep state changed
-                managedWorkloads:
-                  type: array
-                  items:
+                    description: MatchLabels selects workloads by labels
                     type: object
-                    properties:
-                      kind:
-                        type: string
-                      name:
-                        type: string
-                      originalReplicas:
-                        type: integer
-                        format: int32
-                      originalSuspend:
-                        type: boolean
-                  description: Workloads currently managed by this schedule
+                  matchNames:
+                    description: MatchNames selects workloads by name (supports wildcards)
+                    items:
+                      type: string
+                    type: array
+                  types:
+                    description: |-
+                      Types specifies which workload types to target
+                      Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization
+                    items:
+                      type: string
+                    type: array
+                type: object
+            required:
+            - schedule
+            - selector
+            type: object
+          status:
+            description: SlumlordSleepScheduleStatus defines the observed state of
+              SlumlordSleepSchedule
+            properties:
+              lastTransitionTime:
+                description: LastTransitionTime is the last time the sleep state changed
+                format: date-time
+                type: string
+              managedWorkloads:
+                description: ManagedWorkloads lists the workloads being managed
+                items:
+                  description: ManagedWorkload tracks a workload managed by this schedule
+                  properties:
+                    kind:
+                      description: Kind is the workload kind (Deployment, StatefulSet,
+                        CronJob, Cluster, HelmRelease, Kustomization)
+                      type: string
+                    name:
+                      description: Name is the workload name
+                      type: string
+                    originalHibernation:
+                      description: OriginalHibernation stores the hibernation annotation
+                        value before sleeping (for CNPG Cluster)
+                      type: string
+                    originalReplicas:
+                      description: OriginalReplicas stores the replica count before
+                        sleeping (for Deployment/StatefulSet)
+                      format: int32
+                      type: integer
+                    originalSuspend:
+                      description: OriginalSuspend stores the suspend state before
+                        sleeping (for CronJob, HelmRelease, Kustomization)
+                      type: boolean
+                  required:
+                  - kind
+                  - name
+                  type: object
+                type: array
+              sleeping:
+                description: Sleeping indicates whether workloads are currently sleeping
+                type: boolean
+            required:
+            - sleeping
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
