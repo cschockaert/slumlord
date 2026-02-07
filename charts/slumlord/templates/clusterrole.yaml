@@ -65,6 +65,39 @@ rules:
       - patch
       - update
       - watch
+  # CNPG Clusters
+  - apiGroups:
+      - postgresql.cnpg.io
+    resources:
+      - clusters
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  # FluxCD HelmReleases
+  - apiGroups:
+      - helm.toolkit.fluxcd.io
+    resources:
+      - helmreleases
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  # FluxCD Kustomizations
+  - apiGroups:
+      - kustomize.toolkit.fluxcd.io
+    resources:
+      - kustomizations
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
   # Leader election
   - apiGroups:
       - coordination.k8s.io
