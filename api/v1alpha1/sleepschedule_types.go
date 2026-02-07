@@ -52,6 +52,10 @@ type SlumlordSleepScheduleStatus struct {
 	// Sleeping indicates whether workloads are currently sleeping
 	Sleeping bool `json:"sleeping"`
 
+	// DaysDisplay is a human-readable representation of the scheduled days
+	// +optional
+	DaysDisplay string `json:"daysDisplay,omitempty"`
+
 	// ManagedWorkloads lists the workloads being managed
 	// +optional
 	ManagedWorkloads []ManagedWorkload `json:"managedWorkloads,omitempty"`
@@ -87,6 +91,7 @@ type ManagedWorkload struct {
 // +kubebuilder:printcolumn:name="Sleeping",type="boolean",JSONPath=".status.sleeping"
 // +kubebuilder:printcolumn:name="Start",type="string",JSONPath=".spec.schedule.start"
 // +kubebuilder:printcolumn:name="End",type="string",JSONPath=".spec.schedule.end"
+// +kubebuilder:printcolumn:name="Days",type="string",JSONPath=".status.daysDisplay"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // SlumlordSleepSchedule is the Schema for the SlumlordSleepSchedules API

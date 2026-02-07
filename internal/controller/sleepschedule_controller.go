@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -67,8 +69,13 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	shouldSleep := r.shouldBeSleeping(&schedule)
 	logger.Info("Reconciling sleep schedule", "shouldSleep", shouldSleep, "currentlySleeping", schedule.Status.Sleeping)
 
+	// Compute human-readable days display
+	daysDisplay := daysToDisplay(schedule.Spec.Schedule.Days)
+	statusChanged := shouldSleep != schedule.Status.Sleeping
+	daysChanged := schedule.Status.DaysDisplay != daysDisplay
+
 	// If state needs to change, update workloads
-	if shouldSleep != schedule.Status.Sleeping {
+	if statusChanged {
 		if shouldSleep {
 			if err := r.sleepWorkloads(ctx, &schedule); err != nil {
 				logger.Error(err, "Failed to sleep workloads")
@@ -80,11 +87,15 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 				return ctrl.Result{RequeueAfter: time.Minute}, err
 			}
 		}
+	}
 
-		// Update status
-		now := metav1.Now()
-		schedule.Status.Sleeping = shouldSleep
-		schedule.Status.LastTransitionTime = &now
+	if statusChanged || daysChanged {
+		schedule.Status.DaysDisplay = daysDisplay
+		if statusChanged {
+			now := metav1.Now()
+			schedule.Status.Sleeping = shouldSleep
+			schedule.Status.LastTransitionTime = &now
+		}
 		if err := r.Status().Update(ctx, &schedule); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -488,6 +499,49 @@ func (r *SleepScheduleReconciler) wakeFluxResource(ctx context.Context, schedule
 	}
 	logger.Info("Resumed FluxCD resource", "kind", managed.Kind, "name", resource.GetName())
 	return nil
+}
+
+var dayNames = [7]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+
+// daysToDisplay converts a slice of day numbers (0=Sun..6=Sat) to a human-readable string.
+// Consecutive weekdays are collapsed into ranges (e.g., "Mon-Fri").
+func daysToDisplay(days []int) string {
+	if len(days) == 0 {
+		return "Every day"
+	}
+
+	sorted := make([]int, len(days))
+	copy(sorted, days)
+	sort.Ints(sorted)
+
+	// Build ranges of consecutive days
+	type dayRange struct{ start, end int }
+	var ranges []dayRange
+	start := sorted[0]
+	end := sorted[0]
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i] == end+1 {
+			end = sorted[i]
+		} else {
+			ranges = append(ranges, dayRange{start, end})
+			start = sorted[i]
+			end = sorted[i]
+		}
+	}
+	ranges = append(ranges, dayRange{start, end})
+
+	// Format each range
+	parts := make([]string, 0, len(ranges))
+	for _, r := range ranges {
+		if r.start == r.end {
+			parts = append(parts, dayNames[r.start])
+		} else if r.end-r.start == 1 {
+			parts = append(parts, dayNames[r.start]+","+dayNames[r.end])
+		} else {
+			parts = append(parts, dayNames[r.start]+"-"+dayNames[r.end])
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 // SetupWithManager sets up the controller with the Manager
