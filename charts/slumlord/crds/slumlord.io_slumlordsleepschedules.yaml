@@ -24,6 +24,9 @@ spec:
     - jsonPath: .spec.schedule.end
       name: End
       type: string
+    - jsonPath: .status.daysDisplay
+      name: Days
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -108,6 +111,10 @@ spec:
             description: SlumlordSleepScheduleStatus defines the observed state of
               SlumlordSleepSchedule
             properties:
+              daysDisplay:
+                description: DaysDisplay is a human-readable representation of the
+                  scheduled days
+                type: string
               lastTransitionTime:
                 description: LastTransitionTime is the last time the sleep state changed
                 format: date-time

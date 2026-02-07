@@ -22,6 +22,35 @@ import (
 	slumlordv1alpha1 "github.com/cschockaert/slumlord/api/v1alpha1"
 )
 
+func TestDaysToDisplay(t *testing.T) {
+	tests := []struct {
+		name string
+		days []int
+		want string
+	}{
+		{name: "nil days", days: nil, want: "Every day"},
+		{name: "empty days", days: []int{}, want: "Every day"},
+		{name: "weekdays", days: []int{1, 2, 3, 4, 5}, want: "Mon-Fri"},
+		{name: "weekend", days: []int{0, 6}, want: "Sun,Sat"},
+		{name: "non-consecutive", days: []int{1, 3, 5}, want: "Mon,Wed,Fri"},
+		{name: "single day", days: []int{3}, want: "Wed"},
+		{name: "two consecutive", days: []int{1, 2}, want: "Mon,Tue"},
+		{name: "three consecutive", days: []int{1, 2, 3}, want: "Mon-Wed"},
+		{name: "all days", days: []int{0, 1, 2, 3, 4, 5, 6}, want: "Sun-Sat"},
+		{name: "mixed range and single", days: []int{1, 2, 3, 5}, want: "Mon-Wed,Fri"},
+		{name: "unsorted input", days: []int{5, 1, 3}, want: "Mon,Wed,Fri"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := daysToDisplay(tt.days)
+			if got != tt.want {
+				t.Errorf("daysToDisplay(%v) = %q, want %q", tt.days, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShouldBeSleepingAt(t *testing.T) {
 	tests := []struct {
 		name     string
