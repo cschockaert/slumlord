@@ -32,6 +32,41 @@ rules:
       - slumlordsleepschedules/finalizers
     verbs:
       - update
+  # SlumlordIdleDetector resources
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordidledetectors
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordidledetectors/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordidledetectors/finalizers
+    verbs:
+      - update
+  # Pod metrics (for idle detection)
+  - apiGroups:
+      - metrics.k8s.io
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
   # Deployments
   - apiGroups:
       - apps

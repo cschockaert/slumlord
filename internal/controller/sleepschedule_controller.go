@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	slumlordv1alpha1 "github.com/cschockaert/slumlord/api/v1alpha1"
@@ -34,6 +35,8 @@ var cnpgClusterGVK = schema.GroupVersionKind{
 
 const hibernationAnnotation = "cnpg.io/hibernation"
 
+const sleepScheduleFinalizer = "slumlord.io/sleep-schedule-finalizer"
+
 var fluxHelmReleaseGVK = schema.GroupVersionKind{
 	Group:   "helm.toolkit.fluxcd.io",
 	Version: "v2",
@@ -48,6 +51,7 @@ var fluxKustomizationGVK = schema.GroupVersionKind{
 
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordsleepschedules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordsleepschedules/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=slumlord.io,resources=slumlordsleepschedules/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;update;patch
@@ -63,6 +67,33 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	var schedule slumlordv1alpha1.SlumlordSleepSchedule
 	if err := r.Get(ctx, req.NamespacedName, &schedule); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Handle deletion - restore workloads before removing finalizer
+	if !schedule.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(&schedule, sleepScheduleFinalizer) {
+			if schedule.Status.Sleeping {
+				logger.Info("Restoring workloads before deletion")
+				if err := r.wakeWorkloads(ctx, &schedule); err != nil {
+					logger.Error(err, "Failed to restore workloads during deletion")
+					return ctrl.Result{}, err
+				}
+			}
+
+			controllerutil.RemoveFinalizer(&schedule, sleepScheduleFinalizer)
+			if err := r.Update(ctx, &schedule); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(&schedule, sleepScheduleFinalizer) {
+		controllerutil.AddFinalizer(&schedule, sleepScheduleFinalizer)
+		if err := r.Update(ctx, &schedule); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Determine if we should be sleeping
