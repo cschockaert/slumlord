@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Idle detector feature toggle (#20)
+- Idle detector: MatchNames wildcard selector support
+- Idle detector: CRD validation markers (idleDuration pattern, thresholds 0-100)
+- Idle detector: finalizer deletion path test, partial restore test, name-only selector test
+
+### Fixed
+
+- Idle detector: persist status after each scale-down to prevent data loss on partial failure
+- Idle detector: restore only clears successfully restored workloads, failed ones retained for retry
+- Idle detector: warn on unsupported workload types in selector
 
 ### Changed
 
