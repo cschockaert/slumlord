@@ -16,6 +16,7 @@ import (
 
 	slumlordv1alpha1 "github.com/cschockaert/slumlord/api/v1alpha1"
 	"github.com/cschockaert/slumlord/internal/controller"
+	"github.com/cschockaert/slumlord/internal/dashboard"
 )
 
 var (
@@ -31,12 +32,14 @@ func init() {
 func main() {
 	var metricsAddr string
 	var probeAddr string
+	var dashboardAddr string
 	var enableLeaderElection bool
 	var enableIdleDetector bool
 	var enableBinPacker bool
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.StringVar(&dashboardAddr, "dashboard-bind-address", ":8082", "The address the dashboard binds to. Set to 0 to disable.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -103,6 +106,15 @@ func main() {
 		}
 	} else {
 		setupLog.Info("bin packer controller disabled")
+	}
+
+	if dashboardAddr != "0" {
+		if err := mgr.Add(dashboard.NewServer(dashboardAddr, mgr.GetClient())); err != nil {
+			setupLog.Error(err, "unable to set up dashboard")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("dashboard disabled")
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

@@ -33,5 +33,13 @@ Slumlord has been installed!
 4. Check sleep schedules:
 
    kubectl get slumlordsleepschedules -A
+{{- if .Values.dashboard.enabled }}
+
+5. Access the dashboard:
+
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "slumlord.fullname" . }}-dashboard {{ .Values.dashboard.port }}:{{ .Values.dashboard.port }}
+
+   Then open http://localhost:{{ .Values.dashboard.port }}
+{{- end }}
 
 For more information, visit: https://github.com/cschockaert/slumlord

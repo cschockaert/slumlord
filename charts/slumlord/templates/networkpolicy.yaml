@@ -18,6 +18,10 @@ spec:
           protocol: TCP
         - port: {{ .Values.health.port }}
           protocol: TCP
+        {{- if .Values.dashboard.enabled }}
+        - port: {{ .Values.dashboard.port }}
+          protocol: TCP
+        {{- end }}
   egress:
     - {}
 {{- end }}
