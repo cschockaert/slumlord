@@ -14,8 +14,6 @@ linters:
   settings:
     errcheck:
       check-type-assertions: false
-    govet:
-      shadow: false
   exclusions:
     rules:
       - path: _test\.go
