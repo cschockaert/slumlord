@@ -141,3 +141,74 @@ rules:
       - get
       - list
   {{- end }}
+  {{- if .Values.binPacker.enabled }}
+  # SlumlordBinPacker resources
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordbinpackers
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordbinpackers/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordbinpackers/finalizers
+    verbs:
+      - update
+  # Nodes (for bin packing analysis)
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+  # Pods (for bin packing analysis and eviction)
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - pods/eviction
+    verbs:
+      - create
+  # PodDisruptionBudgets (PDB enforcement)
+  - apiGroups:
+      - policy
+    resources:
+      - poddisruptionbudgets
+    verbs:
+      - get
+      - list
+      - watch
+  # ReplicaSets (for pod ownership checks)
+  - apiGroups:
+      - apps
+    resources:
+      - replicasets
+    verbs:
+      - get
+      - list
+      - watch
+  {{- end }}

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- SlumlordBinPacker CRD and controller for node consolidation (bin packing)
+- Cluster-scoped resource with optional namespace filter and node selector
+- Two modes: `report` (analyze only) and `consolidate` (evict pods via Eviction API)
+- Requests-based node utilization analysis (no metrics-server dependency)
+- Pod placement simulation with taint/toleration and nodeSelector matching
+- Protections: skip DaemonSet, mirror, orphan, hostPath, system, and terminating pods
+- PDB enforcement via Kubernetes Eviction API
+- Optional time window for consolidation (reuses SleepWindow pattern)
+- DryRun mode for safe plan preview
+- MaxEvictionsPerCycle cap for controlled rollouts
+- Helm chart integration with `binPacker.enabled` toggle and conditional RBAC
+- Comprehensive tests: utilization calculation, evictability, taint matching, simulation, schedule window
+
 ## [2.2.0] - 2026-02-08
 
 ### Added

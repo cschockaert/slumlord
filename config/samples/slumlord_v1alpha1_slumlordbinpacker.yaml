@@ -1,0 +1,54 @@
+---
+# Report-only example: analyze node utilization without evictions
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordBinPacker
+metadata:
+  name: binpacker-report
+spec:
+  action: report
+  thresholds:
+    cpuRequestPercent: 30
+    memoryRequestPercent: 30
+  excludeNamespaces:
+    - kube-system
+    - kube-public
+    - kube-node-lease
+---
+# Consolidation example: evict pods from underutilized nodes
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordBinPacker
+metadata:
+  name: binpacker-consolidate
+spec:
+  action: consolidate
+  thresholds:
+    cpuRequestPercent: 25
+    memoryRequestPercent: 25
+  maxEvictionsPerCycle: 10
+  excludeNamespaces:
+    - kube-system
+    - kube-public
+    - kube-node-lease
+  # Only consolidate during maintenance window
+  schedule:
+    start: "02:00"
+    end: "06:00"
+    timezone: "Europe/Paris"
+    days: [1, 2, 3, 4, 5]  # weekdays only
+---
+# Dry-run example: build consolidation plan without evicting
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordBinPacker
+metadata:
+  name: binpacker-dryrun
+spec:
+  action: consolidate
+  dryRun: true
+  thresholds:
+    cpuRequestPercent: 20
+    memoryRequestPercent: 20
+  nodeSelector:
+    node-pool: workers
+  namespaces:
+    - staging
+    - dev

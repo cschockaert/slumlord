@@ -49,6 +49,9 @@ spec:
             {{- if .Values.idleDetector.enabled }}
             - --enable-idle-detector
             {{- end }}
+            {{- if .Values.binPacker.enabled }}
+            - --enable-binpacker
+            {{- end }}
             {{- if .Values.dashboard.enabled }}
             - --dashboard-bind-address=:{{ .Values.dashboard.port }}
             {{- else }}
