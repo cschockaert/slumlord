@@ -68,6 +68,12 @@ make uninstall
 - `version` and `appVersion` in `Chart.yaml` must always match the latest release tag
 - No `v` prefix (plain semver: `2.0.1`, not `v2.0.1`)
 
+### Changelog (CHANGELOG.md)
+
+- Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format
+- Must be updated on each release: move items from `[Unreleased]` to a new version section
+- Update comparison links at the bottom of the file
+
 ### Key Design Decisions
 
 1. **State stored in status**: Original workload state (replicas, suspend) is stored in `status.managedWorkloads` to survive operator restarts
