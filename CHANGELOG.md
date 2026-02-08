@@ -7,22 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-02-08
+
 ### Added
 
-- Idle detector feature toggle (#20)
-- Idle detector: MatchNames wildcard selector support
-- Idle detector: CRD validation markers (idleDuration pattern, thresholds 0-100)
-- Idle detector: finalizer deletion path test, partial restore test, name-only selector test
+- SlumlordIdleDetector CRD and controller for detecting and scaling down idle workloads
+- Two modes: `alert` (report only) and `scale` (auto-scale to zero after idle duration)
+- MatchNames wildcard selector support (e.g., `prod-*`)
+- CRD validation markers (idleDuration pattern, thresholds 0-100)
+- Finalizer ensures workloads are restored on detector deletion
+- Comprehensive tests: MatchNames filtering, finalizer deletion, partial restore, name-only selector
 
 ### Fixed
 
 - Idle detector: persist status after each scale-down to prevent data loss on partial failure
 - Idle detector: restore only clears successfully restored workloads, failed ones retained for retry
-- Idle detector: warn on unsupported workload types in selector
 
 ### Changed
 
-- Align Helm chart version/appVersion with release 2.0.1
 - Bump actions/checkout from 4 to 6
 - Bump actions/setup-go from 5 to 6
 - Bump sigs.k8s.io/controller-runtime from 0.17.0 to 0.23.1
@@ -65,7 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.0.1...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.1.0...HEAD
+[2.1.0]: https://github.com/cschockaert/slumlord/compare/2.0.1...2.1.0
 [2.0.1]: https://github.com/cschockaert/slumlord/compare/2.0.0...2.0.1
 [2.0.0]: https://github.com/cschockaert/slumlord/compare/1.0.0...2.0.0
 [1.0.0]: https://github.com/cschockaert/slumlord/releases/tag/1.0.0
