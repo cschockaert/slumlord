@@ -49,6 +49,11 @@ spec:
             {{- if .Values.idleDetector.enabled }}
             - --enable-idle-detector
             {{- end }}
+            {{- if .Values.dashboard.enabled }}
+            - --dashboard-bind-address=:{{ .Values.dashboard.port }}
+            {{- else }}
+            - --dashboard-bind-address=0
+            {{- end }}
           ports:
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
@@ -56,6 +61,11 @@ spec:
             - name: health
               containerPort: {{ .Values.health.port }}
               protocol: TCP
+            {{- if .Values.dashboard.enabled }}
+            - name: dashboard
+              containerPort: {{ .Values.dashboard.port }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

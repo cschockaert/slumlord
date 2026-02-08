@@ -1,0 +1,35 @@
+{{- if and .Values.dashboard.enabled .Values.dashboard.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "slumlord.fullname" . }}-dashboard
+  labels:
+    {{- include "slumlord.labels" . | nindent 4 }}
+  {{- with .Values.dashboard.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.dashboard.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.dashboard.ingress.tls }}
+  tls:
+    {{- toYaml .Values.dashboard.ingress.tls | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.dashboard.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "slumlord.fullname" $ }}-dashboard
+                port:
+                  number: {{ $.Values.dashboard.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

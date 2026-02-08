@@ -98,8 +98,17 @@ rules:
       - patch
       - update
       - watch
+  # SlumlordIdleDetector read-only (dashboard needs these even when controller is disabled)
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordidledetectors
+    verbs:
+      - get
+      - list
+      - watch
   {{- if .Values.idleDetector.enabled }}
-  # SlumlordIdleDetector resources
+  # SlumlordIdleDetector write access (controller only)
   - apiGroups:
       - slumlord.io
     resources:
@@ -107,11 +116,8 @@ rules:
     verbs:
       - create
       - delete
-      - get
-      - list
       - patch
       - update
-      - watch
   - apiGroups:
       - slumlord.io
     resources:
