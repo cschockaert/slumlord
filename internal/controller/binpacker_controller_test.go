@@ -252,7 +252,6 @@ func TestBinPacker_IsEvictable(t *testing.T) {
 	reconciler := &BinPackerReconciler{Scheme: scheme}
 	excludeNS := map[string]bool{"kube-system": true}
 	includeNS := map[string]bool{}
-	dsSet := map[string]bool{"default/some-ds": true}
 	rsMap := map[string]*appsv1.ReplicaSet{}
 
 	tests := []struct {
@@ -304,7 +303,7 @@ func TestBinPacker_IsEvictable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reconciler.isEvictable(tt.pod, excludeNS, includeNS, dsSet, rsMap)
+			got := reconciler.isEvictable(tt.pod, excludeNS, includeNS, rsMap)
 			if got != tt.expected {
 				t.Errorf("isEvictable() = %v, want %v", got, tt.expected)
 			}
@@ -391,6 +390,34 @@ func TestBinPacker_TolerateTaints(t *testing.T) {
 				{Key: "prefer-no", Value: "true", Effect: corev1.TaintEffectPreferNoSchedule},
 			},
 			expectMatch: true,
+		},
+		{
+			name: "Exists with specific Effect matches same effect",
+			pod: corev1.Pod{
+				Spec: corev1.PodSpec{
+					Tolerations: []corev1.Toleration{
+						{Key: "dedicated", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
+					},
+				},
+			},
+			nodeTaints: []corev1.Taint{
+				{Key: "dedicated", Value: "gpu", Effect: corev1.TaintEffectNoSchedule},
+			},
+			expectMatch: true,
+		},
+		{
+			name: "Exists with specific Effect does NOT match different effect",
+			pod: corev1.Pod{
+				Spec: corev1.PodSpec{
+					Tolerations: []corev1.Toleration{
+						{Key: "dedicated", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
+					},
+				},
+			},
+			nodeTaints: []corev1.Taint{
+				{Key: "dedicated", Value: "gpu", Effect: corev1.TaintEffectNoExecute},
+			},
+			expectMatch: false,
 		},
 		{
 			name: "wrong value in toleration",
@@ -597,16 +624,18 @@ func TestBinPacker_MaxEvictions(t *testing.T) {
 	nodeLow := makeNode("node-low", "4000m", "8Gi", nil)
 	nodeTarget := makeNode("node-target", "4000m", "8Gi", nil)
 
-	// Multiple pods on the low node
+	// Multiple pods on the low node (total: 300m/4000m = 7.5% CPU, well below 30%)
 	pod1 := makeRunningPod("pod-1", "default", "node-low", "100m", "128Mi")
 	pod2 := makeRunningPod("pod-2", "default", "node-low", "100m", "128Mi")
 	pod3 := makeRunningPod("pod-3", "default", "node-low", "100m", "128Mi")
-	podTarget := makeRunningPod("pod-target", "default", "node-target", "1000m", "2Gi")
+	// Target node above threshold (2000m/4000m = 50% CPU, 4Gi/8Gi = 50% mem)
+	podTarget := makeRunningPod("pod-target", "default", "node-target", "2000m", "4Gi")
 
 	maxEvictions := int32(2)
 	packer := makeBinPacker("test-maxevict", "consolidate", int32Ptr(30), int32Ptr(30))
 	packer.Spec.MaxEvictionsPerCycle = &maxEvictions
 	packer.Spec.DryRun = true
+	packer.Finalizers = []string{binPackerFinalizer}
 
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -628,8 +657,8 @@ func TestBinPacker_MaxEvictions(t *testing.T) {
 		t.Fatalf("Failed to get packer: %v", err)
 	}
 
-	if len(updated.Status.ConsolidationPlan) > 2 {
-		t.Errorf("Expected max 2 planned evictions, got %d", len(updated.Status.ConsolidationPlan))
+	if len(updated.Status.ConsolidationPlan) != 2 {
+		t.Errorf("Expected exactly 2 planned evictions (maxEvictions=2), got %d", len(updated.Status.ConsolidationPlan))
 	}
 }
 

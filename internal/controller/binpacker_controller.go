@@ -58,7 +58,6 @@ type resourcePair struct {
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
-// +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch
 
 // Reconcile handles the reconciliation loop for SlumlordBinPacker
 func (r *BinPackerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -259,16 +258,6 @@ func (r *BinPackerReconciler) analyzeNodes(ctx context.Context, packer *slumlord
 		includeNSSet[ns] = true
 	}
 
-	// List DaemonSets for evictability check
-	var dsList appsv1.DaemonSetList
-	if err := r.List(ctx, &dsList); err != nil {
-		return nil, err
-	}
-	dsSet := make(map[string]bool)
-	for _, ds := range dsList.Items {
-		dsSet[fmt.Sprintf("%s/%s", ds.Namespace, ds.Name)] = true
-	}
-
 	// List ReplicaSets for owner resolution
 	var rsList appsv1.ReplicaSetList
 	if err := r.List(ctx, &rsList); err != nil {
@@ -313,18 +302,13 @@ func (r *BinPackerReconciler) analyzeNodes(ctx context.Context, packer *slumlord
 		for j := range pods {
 			pod := &pods[j]
 
-			// Sum all pod requests on this node (for utilization calculation)
-			for _, c := range pod.Spec.Containers {
-				if req, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-					cpuReqs.Add(req)
-				}
-				if req, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-					memReqs.Add(req)
-				}
-			}
+			// Sum effective pod requests on this node (for utilization calculation)
+			podCPU, podMem := podRequests(*pod)
+			cpuReqs.Add(podCPU)
+			memReqs.Add(podMem)
 
 			// Check if pod is evictable (respecting NS filters)
-			if r.isEvictable(pod, excludeNSSet, includeNSSet, dsSet, rsMap) {
+			if r.isEvictable(pod, excludeNSSet, includeNSSet, rsMap) {
 				evictable = append(evictable, *pod)
 			}
 		}
@@ -362,7 +346,6 @@ func (r *BinPackerReconciler) analyzeNodes(ctx context.Context, packer *slumlord
 func (r *BinPackerReconciler) isEvictable(
 	pod *corev1.Pod,
 	excludeNSSet, includeNSSet map[string]bool,
-	dsSet map[string]bool,
 	rsMap map[string]*appsv1.ReplicaSet,
 ) bool {
 	// Skip pods in excluded namespaces
@@ -570,7 +553,10 @@ func podToleratesTaint(pod corev1.Pod, taint corev1.Taint) bool {
 		}
 		if toleration.Key == taint.Key {
 			if toleration.Operator == corev1.TolerationOpExists {
-				return true
+				if toleration.Effect == "" || toleration.Effect == taint.Effect {
+					return true
+				}
+				continue
 			}
 			if toleration.Operator == corev1.TolerationOpEqual && toleration.Value == taint.Value {
 				if toleration.Effect == "" || toleration.Effect == taint.Effect {
@@ -588,7 +574,8 @@ func podToleratesTaint(pod corev1.Pod, taint corev1.Taint) bool {
 	return false
 }
 
-// podRequests returns the total CPU and memory requests for a pod.
+// podRequests returns the effective CPU and memory requests for a pod.
+// The kube-scheduler uses max(sum(initContainers), sum(containers)) per resource.
 func podRequests(pod corev1.Pod) (resource.Quantity, resource.Quantity) {
 	var cpu, mem resource.Quantity
 	for _, c := range pod.Spec.Containers {
@@ -598,6 +585,22 @@ func podRequests(pod corev1.Pod) (resource.Quantity, resource.Quantity) {
 		if req, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
 			mem.Add(req)
 		}
+	}
+	// Account for init containers (kube-scheduler takes the max)
+	var initCPU, initMem resource.Quantity
+	for _, c := range pod.Spec.InitContainers {
+		if req, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+			initCPU.Add(req)
+		}
+		if req, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+			initMem.Add(req)
+		}
+	}
+	if initCPU.Cmp(cpu) > 0 {
+		cpu = initCPU
+	}
+	if initMem.Cmp(mem) > 0 {
+		mem = initMem
 	}
 	return cpu, mem
 }
@@ -609,10 +612,14 @@ func (r *BinPackerReconciler) executePlan(ctx context.Context, packer *slumlordv
 
 	for _, planned := range plan {
 		if err := r.evictPod(ctx, planned.PodName, planned.Namespace); err != nil {
+			if client.IgnoreNotFound(err) == nil {
+				// Pod already gone — treat as success
+				logger.Info("Pod already gone, skipping", "pod", planned.PodName, "namespace", planned.Namespace)
+				continue
+			}
 			logger.Error(err, "Failed to evict pod", "pod", planned.PodName, "namespace", planned.Namespace)
-			// Persist status after each batch of evictions for partial failure safety
+			// Persist partial progress for safety (caller handles TotalPodsEvicted)
 			packer.Status.PodsEvictedThisCycle = int32(evicted)
-			packer.Status.TotalPodsEvicted += int64(evicted)
 			if statusErr := r.Status().Update(ctx, packer); statusErr != nil {
 				logger.Error(statusErr, "Failed to persist status after eviction error")
 			}

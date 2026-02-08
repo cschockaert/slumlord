@@ -196,12 +196,11 @@ rules:
       - get
       - list
       - watch
-  # ReplicaSets and DaemonSets (for pod ownership checks)
+  # ReplicaSets (for pod ownership checks)
   - apiGroups:
       - apps
     resources:
       - replicasets
-      - daemonsets
     verbs:
       - get
       - list
