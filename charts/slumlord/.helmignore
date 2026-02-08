@@ -16,3 +16,6 @@
 .idea/
 *.tmproj
 .vscode/
+tests/
+ci/
+*.tgz

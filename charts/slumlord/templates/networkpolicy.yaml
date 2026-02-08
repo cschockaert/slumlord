@@ -1,0 +1,23 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "slumlord.fullname" . }}
+  labels:
+    {{- include "slumlord.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "slumlord.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: {{ .Values.metrics.port }}
+          protocol: TCP
+        - port: {{ .Values.health.port }}
+          protocol: TCP
+  egress:
+    - {}
+{{- end }}

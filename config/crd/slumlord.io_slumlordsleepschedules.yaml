@@ -65,18 +65,22 @@ spec:
                       If empty, applies every day
                     items:
                       type: integer
+                    maxItems: 7
                     type: array
                   end:
                     description: End is the time to wake up (cron format for time,
                       e.g., "06:00")
+                    pattern: ^([01]?[0-9]|2[0-3]):[0-5][0-9]$
                     type: string
                   start:
                     description: Start is the time to start sleeping (cron format
                       for time, e.g., "22:00")
+                    pattern: ^([01]?[0-9]|2[0-3]):[0-5][0-9]$
                     type: string
                   timezone:
-                    description: Timezone is the timezone for the schedule (e.g.,
-                      "Europe/Paris", "UTC")
+                    description: |-
+                      Timezone is the timezone for the schedule (e.g., "Europe/Paris", "UTC")
+                      Defaults to UTC if not specified.
                     type: string
                 required:
                 - end
