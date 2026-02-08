@@ -1,0 +1,190 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: slumlordidledetectors.slumlord.io
+spec:
+  group: slumlord.io
+  names:
+    kind: SlumlordIdleDetector
+    listKind: SlumlordIdleDetectorList
+    plural: slumlordidledetectors
+    singular: slumlordidledetector
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .spec.idleDuration
+      name: Idle Duration
+      type: string
+    - jsonPath: .status.lastCheckTime
+      name: Last Check
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SlumlordIdleDetector is the Schema for the SlumlordIdleDetectors
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SlumlordIdleDetectorSpec defines the desired state of SlumlordIdleDetector
+            properties:
+              action:
+                description: |-
+                  Action defines what to do when a workload is detected as idle
+                  Valid values: "alert", "scale"
+                enum:
+                - alert
+                - scale
+                type: string
+              idleDuration:
+                description: IdleDuration is how long a workload must be idle before
+                  action (e.g., "30m", "1h")
+                type: string
+              selector:
+                description: Selector specifies which workloads to monitor
+                properties:
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: MatchLabels selects workloads by labels
+                    type: object
+                  matchNames:
+                    description: MatchNames selects workloads by name (supports wildcards)
+                    items:
+                      type: string
+                    type: array
+                  types:
+                    description: |-
+                      Types specifies which workload types to target
+                      Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization
+                    items:
+                      type: string
+                    type: array
+                type: object
+              thresholds:
+                description: Thresholds defines the resource usage thresholds for
+                  idle detection
+                properties:
+                  cpuPercent:
+                    description: |-
+                      CPUPercent is the CPU usage percentage threshold (0-100)
+                      Workloads using less than this are considered idle
+                    format: int32
+                    type: integer
+                  memoryPercent:
+                    description: |-
+                      MemoryPercent is the memory usage percentage threshold (0-100)
+                      Workloads using less than this are considered idle
+                    format: int32
+                    type: integer
+                type: object
+            required:
+            - action
+            - idleDuration
+            - selector
+            - thresholds
+            type: object
+          status:
+            description: SlumlordIdleDetectorStatus defines the observed state of
+              SlumlordIdleDetector
+            properties:
+              idleWorkloads:
+                description: IdleWorkloads lists workloads detected as idle
+                items:
+                  description: IdleWorkload represents a workload detected as idle
+                  properties:
+                    currentCPUPercent:
+                      description: CurrentCPUPercent is the current CPU usage percentage
+                      format: int32
+                      type: integer
+                    currentMemoryPercent:
+                      description: CurrentMemoryPercent is the current memory usage
+                        percentage
+                      format: int32
+                      type: integer
+                    idleSince:
+                      description: IdleSince is when the workload was first detected
+                        as idle
+                      format: date-time
+                      type: string
+                    kind:
+                      description: Kind is the workload kind (Deployment, StatefulSet,
+                        CronJob)
+                      type: string
+                    name:
+                      description: Name is the workload name
+                      type: string
+                  required:
+                  - idleSince
+                  - kind
+                  - name
+                  type: object
+                type: array
+              lastCheckTime:
+                description: LastCheckTime is the last time idle detection was performed
+                format: date-time
+                type: string
+              scaledWorkloads:
+                description: ScaledWorkloads tracks workloads that have been scaled
+                  down due to idleness
+                items:
+                  description: ScaledWorkload tracks a workload that was scaled down
+                    due to idleness
+                  properties:
+                    kind:
+                      description: Kind is the workload kind (Deployment, StatefulSet,
+                        CronJob)
+                      type: string
+                    name:
+                      description: Name is the workload name
+                      type: string
+                    originalReplicas:
+                      description: OriginalReplicas stores the replica count before
+                        scaling (for Deployment/StatefulSet)
+                      format: int32
+                      type: integer
+                    originalSuspend:
+                      description: OriginalSuspend stores the suspend state before
+                        scaling (for CronJob)
+                      type: boolean
+                    scaledAt:
+                      description: ScaledAt is when the workload was scaled down
+                      format: date-time
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  - scaledAt
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

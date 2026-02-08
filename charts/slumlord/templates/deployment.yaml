@@ -46,6 +46,9 @@ spec:
             {{- if .Values.leaderElection.enabled }}
             - --leader-elect
             {{- end }}
+            {{- if .Values.idleDetector.enabled }}
+            - --enable-idle-detector
+            {{- end }}
           ports:
             - name: metrics
               containerPort: {{ .Values.metrics.port }}

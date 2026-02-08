@@ -79,3 +79,7 @@ podDisruptionBudget:
 # Network Policy
 networkPolicy:
   enabled: false
+
+# Idle detector feature (experimental, metrics stub)
+idleDetector:
+  enabled: false

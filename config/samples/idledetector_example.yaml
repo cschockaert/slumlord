@@ -1,0 +1,36 @@
+# Example: Detect idle deployments using less than 5% CPU and 10% memory for 1 hour
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordIdleDetector
+metadata:
+  name: idle-detector
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - Deployment
+      - StatefulSet
+  thresholds:
+    cpuPercent: 5
+    memoryPercent: 10
+  idleDuration: "1h"
+  action: alert
+---
+# Example: Auto-scale idle workloads after 30 minutes
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordIdleDetector
+metadata:
+  name: idle-scaler
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - Deployment
+  thresholds:
+    cpuPercent: 3
+    memoryPercent: 5
+  idleDuration: "30m"
+  action: scale
