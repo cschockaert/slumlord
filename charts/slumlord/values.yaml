@@ -83,3 +83,7 @@ networkPolicy:
 # Idle detector feature (experimental, metrics stub)
 idleDetector:
   enabled: false
+
+# Bin packer feature for node consolidation
+binPacker:
+  enabled: false

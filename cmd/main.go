@@ -33,6 +33,7 @@ func main() {
 	var probeAddr string
 	var enableLeaderElection bool
 	var enableIdleDetector bool
+	var enableBinPacker bool
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -41,6 +42,8 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&enableIdleDetector, "enable-idle-detector", false,
 		"Enable the idle detector controller (experimental).")
+	flag.BoolVar(&enableBinPacker, "enable-binpacker", false,
+		"Enable the bin packer controller for node consolidation.")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -88,6 +91,18 @@ func main() {
 		}
 	} else {
 		setupLog.Info("idle detector controller disabled")
+	}
+
+	if enableBinPacker {
+		if err = (&controller.BinPackerReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "SlumlordBinPacker")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("bin packer controller disabled")
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

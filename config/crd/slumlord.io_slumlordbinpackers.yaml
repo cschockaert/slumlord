@@ -1,0 +1,245 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: slumlordbinpackers.slumlord.io
+spec:
+  group: slumlord.io
+  names:
+    kind: SlumlordBinPacker
+    listKind: SlumlordBinPackerList
+    plural: slumlordbinpackers
+    singular: slumlordbinpacker
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.candidateNodeCount
+      name: Candidates
+      type: integer
+    - jsonPath: .status.podsEvictedThisCycle
+      name: Evicted
+      type: integer
+    - jsonPath: .status.lastAnalysisTime
+      name: Last Analysis
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SlumlordBinPacker is the Schema for the SlumlordBinPackers API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SlumlordBinPackerSpec defines the desired state of SlumlordBinPacker
+            properties:
+              action:
+                description: |-
+                  Action defines what to do with underutilized nodes
+                  Valid values: "report", "consolidate"
+                enum:
+                - report
+                - consolidate
+                type: string
+              dryRun:
+                description: DryRun simulates consolidation without evicting pods
+                type: boolean
+              excludeNamespaces:
+                description: |-
+                  ExcludeNamespaces skips pods in these namespaces
+                  Defaults to kube-system, kube-public, kube-node-lease if not set
+                items:
+                  type: string
+                type: array
+              maxEvictionsPerCycle:
+                description: MaxEvictionsPerCycle caps the number of pod evictions
+                  per reconcile cycle
+                format: int32
+                minimum: 1
+                type: integer
+              namespaces:
+                description: Namespaces limits pod analysis to these namespaces
+                items:
+                  type: string
+                type: array
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: NodeSelector filters which nodes to consider for bin
+                  packing
+                type: object
+              schedule:
+                description: Schedule defines an optional time window for consolidation
+                properties:
+                  days:
+                    description: |-
+                      Days specifies which days the schedule applies (0=Sunday, 6=Saturday)
+                      If empty, applies every day
+                    items:
+                      type: integer
+                    maxItems: 7
+                    type: array
+                  end:
+                    description: End is the time to wake up (cron format for time,
+                      e.g., "06:00")
+                    pattern: ^([01]?[0-9]|2[0-3]):[0-5][0-9]$
+                    type: string
+                  start:
+                    description: Start is the time to start sleeping (cron format
+                      for time, e.g., "22:00")
+                    pattern: ^([01]?[0-9]|2[0-3]):[0-5][0-9]$
+                    type: string
+                  timezone:
+                    description: |-
+                      Timezone is the timezone for the schedule (e.g., "Europe/Paris", "UTC")
+                      Defaults to UTC if not specified.
+                    type: string
+                required:
+                - end
+                - start
+                type: object
+              thresholds:
+                description: Thresholds defines resource usage thresholds for candidate
+                  node detection
+                properties:
+                  cpuRequestPercent:
+                    description: |-
+                      CPURequestPercent is the CPU requests/allocatable percentage threshold (0-100).
+                      Nodes below this are candidates for consolidation.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  memoryRequestPercent:
+                    description: |-
+                      MemoryRequestPercent is the memory requests/allocatable percentage threshold (0-100).
+                      Nodes below this are candidates for consolidation.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                type: object
+            required:
+            - action
+            - thresholds
+            type: object
+          status:
+            description: SlumlordBinPackerStatus defines the observed state of SlumlordBinPacker
+            properties:
+              candidateNodeCount:
+                description: CandidateNodeCount is the number of candidate nodes
+                format: int32
+                type: integer
+              candidateNodes:
+                description: CandidateNodes lists nodes identified as underutilized
+                items:
+                  description: CandidateNode represents a node identified as underutilized
+                  properties:
+                    cpuRequestPercent:
+                      description: CPURequestPercent is the current CPU requests/allocatable
+                        percentage
+                      format: int32
+                      type: integer
+                    memoryRequestPercent:
+                      description: MemoryRequestPercent is the current memory requests/allocatable
+                        percentage
+                      format: int32
+                      type: integer
+                    name:
+                      description: Name is the node name
+                      type: string
+                    podCount:
+                      description: PodCount is the number of evictable pods on this
+                        node
+                      format: int32
+                      type: integer
+                  required:
+                  - cpuRequestPercent
+                  - memoryRequestPercent
+                  - name
+                  - podCount
+                  type: object
+                type: array
+              consolidationPlan:
+                description: ConsolidationPlan lists planned pod evictions
+                items:
+                  description: PlannedEviction represents a planned pod eviction
+                  properties:
+                    namespace:
+                      description: Namespace is the pod namespace
+                      type: string
+                    podName:
+                      description: PodName is the pod to evict
+                      type: string
+                    reason:
+                      description: Reason explains why this pod was selected
+                      type: string
+                    sourceNode:
+                      description: SourceNode is the node the pod is currently on
+                      type: string
+                    targetNode:
+                      description: TargetNode is the suggested target node
+                      type: string
+                  required:
+                  - namespace
+                  - podName
+                  - reason
+                  - sourceNode
+                  - targetNode
+                  type: object
+                type: array
+              lastAnalysisTime:
+                description: LastAnalysisTime is the last time node analysis was performed
+                format: date-time
+                type: string
+              lastConsolidationTime:
+                description: LastConsolidationTime is the last time pod evictions
+                  were performed
+                format: date-time
+                type: string
+              nodesAnalyzed:
+                description: NodesAnalyzed is the total number of nodes analyzed
+                format: int32
+                type: integer
+              podsEvictedThisCycle:
+                description: PodsEvictedThisCycle is the number of pods evicted in
+                  the last cycle
+                format: int32
+                type: integer
+              totalPodsEvicted:
+                description: TotalPodsEvicted is the cumulative number of pods evicted
+                format: int64
+                type: integer
+            required:
+            - candidateNodeCount
+            - nodesAnalyzed
+            - podsEvictedThisCycle
+            - totalPodsEvicted
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
