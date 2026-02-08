@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"path"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -17,6 +19,13 @@ import (
 )
 
 const idleDetectorFinalizer = "slumlord.io/idle-detector-finalizer"
+
+// supportedIdleDetectorTypes lists the workload types supported by the idle detector
+var supportedIdleDetectorTypes = map[string]bool{
+	"Deployment":  true,
+	"StatefulSet": true,
+	"CronJob":     true,
+}
 
 // IdleDetectorReconciler reconciles a SlumlordIdleDetector object
 type IdleDetectorReconciler struct {
@@ -47,7 +56,10 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if controllerutil.ContainsFinalizer(&detector, idleDetectorFinalizer) {
 			logger.Info("Restoring workloads before deletion")
 			if err := r.restoreScaledWorkloads(ctx, &detector); err != nil {
-				logger.Error(err, "Failed to restore workloads during deletion")
+				// Persist partial restore progress before returning error
+				if statusErr := r.Status().Update(ctx, &detector); statusErr != nil {
+					logger.Error(statusErr, "Failed to persist restore progress")
+				}
 				return ctrl.Result{}, err
 			}
 
@@ -68,6 +80,16 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	logger.Info("Reconciling idle detector", "name", detector.Name, "action", detector.Spec.Action)
+
+	// Warn about unsupported types in selector
+	for _, t := range detector.Spec.Selector.Types {
+		if !supportedIdleDetectorTypes[t] {
+			logger.Info("Unsupported workload type for idle detector, skipping", "type", t)
+		}
+	}
+
+	// Warn that metrics collection is not yet implemented
+	logger.V(1).Info("Metrics collection is not yet implemented; idle detection uses stubs that always return not-idle")
 
 	// Parse idle duration
 	idleDuration, err := time.ParseDuration(detector.Spec.IdleDuration)
@@ -92,6 +114,10 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if detector.Spec.Action == "scale" {
 		if err := r.scaleDownIdleWorkloads(ctx, &detector, idleDuration); err != nil {
 			logger.Error(err, "Failed to scale down idle workloads")
+			// Persist any status changes accumulated so far
+			if statusErr := r.Status().Update(ctx, &detector); statusErr != nil {
+				logger.Error(statusErr, "Failed to persist status after scale error")
+			}
 			return ctrl.Result{RequeueAfter: 5 * time.Minute}, err
 		}
 	}
@@ -105,6 +131,30 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
+// matchesSelector checks if a workload name matches the selector's MatchNames patterns
+func matchesSelector(name string, selector slumlordv1alpha1.WorkloadSelector) bool {
+	// If no MatchNames specified, all workloads match (label filtering already done at List level)
+	if len(selector.MatchNames) == 0 {
+		return true
+	}
+
+	for _, pattern := range selector.MatchNames {
+		if matched, err := path.Match(pattern, name); err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
+// listOptions returns the client list options for the detector's selector
+func (r *IdleDetectorReconciler) listOptions(detector *slumlordv1alpha1.SlumlordIdleDetector) []client.ListOption {
+	opts := []client.ListOption{client.InNamespace(detector.Namespace)}
+	if len(detector.Spec.Selector.MatchLabels) > 0 {
+		opts = append(opts, client.MatchingLabels(detector.Spec.Selector.MatchLabels))
+	}
+	return opts
+}
+
 // detectIdleWorkloads checks all targeted workloads and returns those that are idle
 func (r *IdleDetectorReconciler) detectIdleWorkloads(ctx context.Context, detector *slumlordv1alpha1.SlumlordIdleDetector, idleDuration time.Duration) ([]slumlordv1alpha1.IdleWorkload, error) {
 	logger := log.FromContext(ctx)
@@ -114,18 +164,20 @@ func (r *IdleDetectorReconciler) detectIdleWorkloads(ctx context.Context, detect
 	// Handle Deployments
 	if r.shouldManageType(detector, "Deployment") {
 		var deployments appsv1.DeploymentList
-		if err := r.List(ctx, &deployments, client.InNamespace(detector.Namespace), client.MatchingLabels(detector.Spec.Selector.MatchLabels)); err != nil {
+		if err := r.List(ctx, &deployments, r.listOptions(detector)...); err != nil {
 			return nil, err
 		}
 
 		for _, deploy := range deployments.Items {
+			if !matchesSelector(deploy.Name, detector.Spec.Selector) {
+				continue
+			}
+
 			// Skip already scaled down deployments
 			if deploy.Spec.Replicas != nil && *deploy.Spec.Replicas == 0 {
 				continue
 			}
 
-			// TODO: Integrate with metrics-server or Prometheus to get actual CPU/memory usage
-			// For now, stub the metrics check - always returns false (not idle)
 			isIdle, cpuPercent, memPercent := r.checkWorkloadMetrics(ctx, "Deployment", deploy.Name, deploy.Namespace, detector.Spec.Thresholds)
 
 			if isIdle {
@@ -153,17 +205,20 @@ func (r *IdleDetectorReconciler) detectIdleWorkloads(ctx context.Context, detect
 	// Handle StatefulSets
 	if r.shouldManageType(detector, "StatefulSet") {
 		var statefulsets appsv1.StatefulSetList
-		if err := r.List(ctx, &statefulsets, client.InNamespace(detector.Namespace), client.MatchingLabels(detector.Spec.Selector.MatchLabels)); err != nil {
+		if err := r.List(ctx, &statefulsets, r.listOptions(detector)...); err != nil {
 			return nil, err
 		}
 
 		for _, sts := range statefulsets.Items {
+			if !matchesSelector(sts.Name, detector.Spec.Selector) {
+				continue
+			}
+
 			// Skip already scaled down statefulsets
 			if sts.Spec.Replicas != nil && *sts.Spec.Replicas == 0 {
 				continue
 			}
 
-			// TODO: Integrate with metrics-server or Prometheus to get actual CPU/memory usage
 			isIdle, cpuPercent, memPercent := r.checkWorkloadMetrics(ctx, "StatefulSet", sts.Name, sts.Namespace, detector.Spec.Thresholds)
 
 			if isIdle {
@@ -190,18 +245,20 @@ func (r *IdleDetectorReconciler) detectIdleWorkloads(ctx context.Context, detect
 	// Handle CronJobs
 	if r.shouldManageType(detector, "CronJob") {
 		var cronjobs batchv1.CronJobList
-		if err := r.List(ctx, &cronjobs, client.InNamespace(detector.Namespace), client.MatchingLabels(detector.Spec.Selector.MatchLabels)); err != nil {
+		if err := r.List(ctx, &cronjobs, r.listOptions(detector)...); err != nil {
 			return nil, err
 		}
 
 		for _, cj := range cronjobs.Items {
+			if !matchesSelector(cj.Name, detector.Spec.Selector) {
+				continue
+			}
+
 			// Skip already suspended cronjobs
 			if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 				continue
 			}
 
-			// TODO: For CronJobs, check if they haven't run recently or if their jobs are idle
-			// For now, stub - CronJobs are not considered idle by default
 			isIdle, cpuPercent, memPercent := r.checkCronJobMetrics(ctx, cj.Name, cj.Namespace, detector.Spec.Thresholds)
 
 			if isIdle {
@@ -231,17 +288,7 @@ func (r *IdleDetectorReconciler) detectIdleWorkloads(ctx context.Context, detect
 // checkWorkloadMetrics checks if a workload is idle based on resource usage
 // TODO: This is a stub - implement actual metrics collection from metrics-server or Prometheus
 func (r *IdleDetectorReconciler) checkWorkloadMetrics(ctx context.Context, kind, name, namespace string, thresholds slumlordv1alpha1.IdleThresholds) (bool, *int32, *int32) {
-	// TODO: Implement metrics collection
-	// Options for implementation:
-	// 1. Use metrics-server API (k8s.io/metrics/pkg/client/clientset)
-	// 2. Query Prometheus directly
-	// 3. Use custom metrics API
-	//
-	// Example implementation outline:
-	// - Get PodMetrics for pods owned by this workload
-	// - Calculate average CPU and memory usage across pods
-	// - Compare against thresholds
-	//
+	// TODO: Implement metrics collection via metrics-server API or Prometheus
 	// For now, return false (not idle) to avoid accidental scaling
 	return false, nil, nil
 }
@@ -250,16 +297,13 @@ func (r *IdleDetectorReconciler) checkWorkloadMetrics(ctx context.Context, kind,
 // TODO: This is a stub - implement actual idle detection for CronJobs
 func (r *IdleDetectorReconciler) checkCronJobMetrics(ctx context.Context, name, namespace string, thresholds slumlordv1alpha1.IdleThresholds) (bool, *int32, *int32) {
 	// TODO: Implement CronJob idle detection
-	// Options:
-	// 1. Check if last successful job was too long ago
-	// 2. Check if spawned jobs are idle
-	// 3. Analyze job history for patterns
-	//
 	// For now, return false (not idle) to avoid accidental suspension
 	return false, nil, nil
 }
 
-// scaleDownIdleWorkloads scales down workloads that have been idle for longer than idleDuration
+// scaleDownIdleWorkloads scales down workloads that have been idle for longer than idleDuration.
+// After each successful scale-down, status is persisted immediately to avoid losing
+// original state if a subsequent operation fails.
 func (r *IdleDetectorReconciler) scaleDownIdleWorkloads(ctx context.Context, detector *slumlordv1alpha1.SlumlordIdleDetector, idleDuration time.Duration) error {
 	logger := log.FromContext(ctx)
 	now := time.Now()
@@ -285,24 +329,25 @@ func (r *IdleDetectorReconciler) scaleDownIdleWorkloads(ctx context.Context, det
 		}
 
 		// Scale down the workload
+		var scaleErr error
 		switch idle.Kind {
 		case "Deployment":
-			if err := r.scaleDownDeployment(ctx, detector, idle.Name); err != nil {
-				logger.Error(err, "Failed to scale down deployment", "name", idle.Name)
-				continue
-			}
-
+			scaleErr = r.scaleDownDeployment(ctx, detector, idle.Name)
 		case "StatefulSet":
-			if err := r.scaleDownStatefulSet(ctx, detector, idle.Name); err != nil {
-				logger.Error(err, "Failed to scale down statefulset", "name", idle.Name)
-				continue
-			}
-
+			scaleErr = r.scaleDownStatefulSet(ctx, detector, idle.Name)
 		case "CronJob":
-			if err := r.suspendCronJob(ctx, detector, idle.Name); err != nil {
-				logger.Error(err, "Failed to suspend cronjob", "name", idle.Name)
-				continue
-			}
+			scaleErr = r.suspendCronJob(ctx, detector, idle.Name)
+		}
+
+		if scaleErr != nil {
+			logger.Error(scaleErr, "Failed to scale down workload", "kind", idle.Kind, "name", idle.Name)
+			continue
+		}
+
+		// Persist status immediately after each successful scale-down
+		// so we don't lose original state if a later operation fails
+		if err := r.Status().Update(ctx, detector); err != nil {
+			return fmt.Errorf("failed to persist status after scaling %s/%s: %w", idle.Kind, idle.Name, err)
 		}
 	}
 
@@ -321,14 +366,12 @@ func (r *IdleDetectorReconciler) scaleDownDeployment(ctx context.Context, detect
 	if deploy.Spec.Replicas != nil && *deploy.Spec.Replicas > 0 {
 		original := *deploy.Spec.Replicas
 
-		// Update workload FIRST, then status
 		zero := int32(0)
 		deploy.Spec.Replicas = &zero
 		if err := r.Update(ctx, &deploy); err != nil {
 			return err
 		}
 
-		// Only add to status AFTER successful update
 		detector.Status.ScaledWorkloads = append(detector.Status.ScaledWorkloads, slumlordv1alpha1.ScaledWorkload{
 			Kind:             "Deployment",
 			Name:             name,
@@ -353,14 +396,12 @@ func (r *IdleDetectorReconciler) scaleDownStatefulSet(ctx context.Context, detec
 	if sts.Spec.Replicas != nil && *sts.Spec.Replicas > 0 {
 		original := *sts.Spec.Replicas
 
-		// Update workload FIRST, then status
 		zero := int32(0)
 		sts.Spec.Replicas = &zero
 		if err := r.Update(ctx, &sts); err != nil {
 			return err
 		}
 
-		// Only add to status AFTER successful update
 		detector.Status.ScaledWorkloads = append(detector.Status.ScaledWorkloads, slumlordv1alpha1.ScaledWorkload{
 			Kind:             "StatefulSet",
 			Name:             name,
@@ -388,14 +429,12 @@ func (r *IdleDetectorReconciler) suspendCronJob(ctx context.Context, detector *s
 			original = *cj.Spec.Suspend
 		}
 
-		// Update workload FIRST, then status
 		suspend := true
 		cj.Spec.Suspend = &suspend
 		if err := r.Update(ctx, &cj); err != nil {
 			return err
 		}
 
-		// Only add to status AFTER successful update
 		detector.Status.ScaledWorkloads = append(detector.Status.ScaledWorkloads, slumlordv1alpha1.ScaledWorkload{
 			Kind:            "CronJob",
 			Name:            name,
@@ -408,66 +447,96 @@ func (r *IdleDetectorReconciler) suspendCronJob(ctx context.Context, detector *s
 	return nil
 }
 
-// restoreScaledWorkloads restores all workloads that were scaled down
+// restoreScaledWorkloads restores all workloads that were scaled down.
+// Only successfully restored workloads are removed from the status; failed ones
+// are retained for retry on the next reconciliation.
 func (r *IdleDetectorReconciler) restoreScaledWorkloads(ctx context.Context, detector *slumlordv1alpha1.SlumlordIdleDetector) error {
 	logger := log.FromContext(ctx)
 
+	var remaining []slumlordv1alpha1.ScaledWorkload
+	var lastErr error
+
 	for _, scaled := range detector.Status.ScaledWorkloads {
+		restored := false
+
 		switch scaled.Kind {
 		case "Deployment":
 			var deploy appsv1.Deployment
 			if err := r.Get(ctx, client.ObjectKey{Namespace: detector.Namespace, Name: scaled.Name}, &deploy); err != nil {
 				logger.Error(err, "Failed to get deployment for restore", "name", scaled.Name)
+				lastErr = err
+				remaining = append(remaining, scaled)
 				continue
 			}
 			if scaled.OriginalReplicas != nil {
 				deploy.Spec.Replicas = scaled.OriginalReplicas
 				if err := r.Update(ctx, &deploy); err != nil {
 					logger.Error(err, "Failed to restore deployment", "name", scaled.Name)
+					lastErr = err
+					remaining = append(remaining, scaled)
 					continue
 				}
 				logger.Info("Restored deployment", "name", scaled.Name, "replicas", *scaled.OriginalReplicas)
 			}
+			restored = true
 
 		case "StatefulSet":
 			var sts appsv1.StatefulSet
 			if err := r.Get(ctx, client.ObjectKey{Namespace: detector.Namespace, Name: scaled.Name}, &sts); err != nil {
 				logger.Error(err, "Failed to get statefulset for restore", "name", scaled.Name)
+				lastErr = err
+				remaining = append(remaining, scaled)
 				continue
 			}
 			if scaled.OriginalReplicas != nil {
 				sts.Spec.Replicas = scaled.OriginalReplicas
 				if err := r.Update(ctx, &sts); err != nil {
 					logger.Error(err, "Failed to restore statefulset", "name", scaled.Name)
+					lastErr = err
+					remaining = append(remaining, scaled)
 					continue
 				}
 				logger.Info("Restored statefulset", "name", scaled.Name, "replicas", *scaled.OriginalReplicas)
 			}
+			restored = true
 
 		case "CronJob":
 			var cj batchv1.CronJob
 			if err := r.Get(ctx, client.ObjectKey{Namespace: detector.Namespace, Name: scaled.Name}, &cj); err != nil {
 				logger.Error(err, "Failed to get cronjob for restore", "name", scaled.Name)
+				lastErr = err
+				remaining = append(remaining, scaled)
 				continue
 			}
 			if scaled.OriginalSuspend != nil {
 				cj.Spec.Suspend = scaled.OriginalSuspend
 				if err := r.Update(ctx, &cj); err != nil {
 					logger.Error(err, "Failed to restore cronjob", "name", scaled.Name)
+					lastErr = err
+					remaining = append(remaining, scaled)
 					continue
 				}
 				logger.Info("Restored cronjob", "name", scaled.Name)
 			}
+			restored = true
+		}
+
+		if !restored {
+			remaining = append(remaining, scaled)
 		}
 	}
 
-	detector.Status.ScaledWorkloads = nil
+	detector.Status.ScaledWorkloads = remaining
+
+	if lastErr != nil {
+		return fmt.Errorf("some workloads failed to restore: %w", lastErr)
+	}
 	return nil
 }
 
 // shouldManageType checks if the detector should manage a specific workload type
 func (r *IdleDetectorReconciler) shouldManageType(detector *slumlordv1alpha1.SlumlordIdleDetector, kind string) bool {
-	// If no types specified, manage all types
+	// If no types specified, manage all supported types
 	if len(detector.Spec.Selector.Types) == 0 {
 		return true
 	}

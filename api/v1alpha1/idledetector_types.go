@@ -13,6 +13,7 @@ type SlumlordIdleDetectorSpec struct {
 	Thresholds IdleThresholds `json:"thresholds"`
 
 	// IdleDuration is how long a workload must be idle before action (e.g., "30m", "1h")
+	// +kubebuilder:validation:Pattern=`^([0-9]+h)?([0-9]+m)?([0-9]+s)?$`
 	IdleDuration string `json:"idleDuration"`
 
 	// Action defines what to do when a workload is detected as idle
@@ -26,11 +27,15 @@ type IdleThresholds struct {
 	// CPUPercent is the CPU usage percentage threshold (0-100)
 	// Workloads using less than this are considered idle
 	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
 	CPUPercent *int32 `json:"cpuPercent,omitempty"`
 
 	// MemoryPercent is the memory usage percentage threshold (0-100)
 	// Workloads using less than this are considered idle
 	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
 	MemoryPercent *int32 `json:"memoryPercent,omitempty"`
 }
 
