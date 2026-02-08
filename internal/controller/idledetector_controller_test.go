@@ -1170,7 +1170,7 @@ func int32Ptr(i int32) *int32 { return &i }
 // via a reactor (needed because the fake tracker stores objects under "podmetricses"
 // while the typed client queries resource "pods").
 func newFakeMetricsClient(podMetrics ...metricsv1beta1.PodMetrics) *metricsfake.Clientset {
-	fc := metricsfake.NewSimpleClientset()
+	fc := metricsfake.NewSimpleClientset() //nolint:staticcheck // NewClientset not available in k8s.io/metrics v0.35.0
 	fc.PrependReactor("list", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
 		la := action.(ktesting.ListAction)
 		ns := la.GetNamespace()

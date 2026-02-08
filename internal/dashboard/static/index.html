@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Slumlord Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #0f172a; }
+        .timeline-bar { position: relative; height: 32px; border-radius: 6px; background: #1e293b; overflow: hidden; }
+        .timeline-segment { position: absolute; top: 0; bottom: 0; background: #6366f1; opacity: 0.7; }
+        .timeline-now { position: absolute; top: -4px; bottom: -4px; width: 2px; background: #ef4444; z-index: 10; }
+        .badge-sleeping { background: #6366f1; color: #e0e7ff; }
+        .badge-awake { background: #059669; color: #d1fae5; }
+        .badge-alert { background: #d97706; color: #fef3c7; }
+        .badge-scale { background: #dc2626; color: #fee2e2; }
+        @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        .refresh-dot { animation: pulse-dot 2s ease-in-out infinite; }
+    </style>
+</head>
+<body class="text-slate-200 min-h-screen">
+    <div class="max-w-7xl mx-auto px-4 py-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8">
+            <div class="flex items-center gap-3">
+                <h1 class="text-3xl font-bold tracking-tight text-white">SLUMLORD</h1>
+                <span class="text-sm text-slate-500 mt-1">dashboard</span>
+            </div>
+            <div class="flex items-center gap-2 text-sm text-slate-400">
+                <span class="refresh-dot inline-block w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span id="refresh-status">auto-refresh 30s</span>
+            </div>
+        </div>
+
+        <!-- Stats Cards -->
+        <div id="stats" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div class="text-sm text-slate-400 mb-1">Total Schedules</div>
+                <div id="stat-total" class="text-2xl font-bold text-white">-</div>
+            </div>
+            <div class="bg-slate-800 rounded-lg p-4 border border-indigo-900/50">
+                <div class="text-sm text-indigo-400 mb-1">Sleeping</div>
+                <div id="stat-sleeping" class="text-2xl font-bold text-indigo-300">-</div>
+            </div>
+            <div class="bg-slate-800 rounded-lg p-4 border border-emerald-900/50">
+                <div class="text-sm text-emerald-400 mb-1">Awake</div>
+                <div id="stat-awake" class="text-2xl font-bold text-emerald-300">-</div>
+            </div>
+            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div class="text-sm text-slate-400 mb-1">Managed Workloads</div>
+                <div id="stat-workloads" class="text-2xl font-bold text-white">-</div>
+            </div>
+        </div>
+
+        <!-- 24h Timeline -->
+        <div id="timeline-section" class="mb-8 hidden">
+            <h2 class="text-lg font-semibold text-white mb-4">24h Timeline</h2>
+            <div id="timeline-container" class="space-y-3"></div>
+            <div class="flex justify-between text-xs text-slate-500 mt-1 px-1">
+                <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span>
+            </div>
+        </div>
+
+        <!-- Schedules -->
+        <div id="schedules-section" class="mb-8">
+            <h2 class="text-lg font-semibold text-white mb-4">Sleep Schedules</h2>
+            <div id="schedules-container">
+                <div class="text-slate-500 text-sm">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Idle Detectors -->
+        <div id="idle-section" class="mb-8 hidden">
+            <h2 class="text-lg font-semibold text-white mb-4">Idle Detectors</h2>
+            <div id="idle-container"></div>
+        </div>
+    </div>
+
+    <script>
+    const REFRESH_INTERVAL = 30000;
+
+    async function fetchJSON(url) {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.json();
+    }
+
+    function renderStats(overview) {
+        document.getElementById('stat-total').textContent = overview.totalSchedules;
+        document.getElementById('stat-sleeping').textContent = overview.sleepingCount;
+        document.getElementById('stat-awake').textContent = overview.awakeCount;
+        document.getElementById('stat-workloads').textContent = overview.managedWorkloads;
+    }
+
+    function timeToMinutes(timeStr) {
+        const [h, m] = timeStr.split(':').map(Number);
+        return h * 60 + m;
+    }
+
+    function renderTimeline(schedules) {
+        const section = document.getElementById('timeline-section');
+        const container = document.getElementById('timeline-container');
+        if (schedules.length === 0) { section.classList.add('hidden'); return; }
+        section.classList.remove('hidden');
+
+        const now = new Date();
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+        const nowPct = (nowMinutes / 1440) * 100;
+
+        container.innerHTML = schedules.map(s => {
+            const start = timeToMinutes(s.start);
+            const end = timeToMinutes(s.end);
+            let segments = '';
+
+            if (start <= end) {
+                const left = (start / 1440) * 100;
+                const width = ((end - start) / 1440) * 100;
+                segments = `<div class="timeline-segment" style="left:${left}%;width:${width}%"></div>`;
+            } else {
+                const w1 = ((1440 - start) / 1440) * 100;
+                const w2 = (end / 1440) * 100;
+                segments = `<div class="timeline-segment" style="left:${(start/1440)*100}%;width:${w1}%"></div>` +
+                           `<div class="timeline-segment" style="left:0%;width:${w2}%"></div>`;
+            }
+
+            return `<div class="flex items-center gap-3">
+                <div class="w-48 text-sm text-slate-400 truncate" title="${s.namespace}/${s.name}">${s.namespace}/<span class="text-slate-200">${s.name}</span></div>
+                <div class="flex-1 timeline-bar">
+                    ${segments}
+                    <div class="timeline-now" style="left:${nowPct}%"></div>
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    function renderSchedules(schedules) {
+        const container = document.getElementById('schedules-container');
+        if (schedules.length === 0) {
+            container.innerHTML = '<div class="text-slate-500 text-sm">No sleep schedules found.</div>';
+            return;
+        }
+
+        container.innerHTML = schedules.map(s => {
+            const badge = s.sleeping
+                ? '<span class="badge-sleeping text-xs font-medium px-2 py-0.5 rounded-full">SLEEPING</span>'
+                : '<span class="badge-awake text-xs font-medium px-2 py-0.5 rounded-full">AWAKE</span>';
+
+            const selector = [];
+            if (s.matchLabels && Object.keys(s.matchLabels).length > 0) {
+                selector.push('Labels: ' + Object.entries(s.matchLabels).map(([k,v]) => `${k}=${v}`).join(', '));
+            }
+            if (s.matchNames && s.matchNames.length > 0) {
+                selector.push('Names: ' + s.matchNames.join(', '));
+            }
+            if (s.types && s.types.length > 0) {
+                selector.push('Types: ' + s.types.join(', '));
+            }
+
+            const workloads = (s.managedWorkloads || []).map(w => {
+                let state = '';
+                if (w.originalReplicas !== undefined && w.originalReplicas !== null) state = `replicas: ${w.originalReplicas}`;
+                else if (w.originalSuspend !== undefined && w.originalSuspend !== null) state = `suspend: ${w.originalSuspend}`;
+                else if (w.originalHibernation !== undefined && w.originalHibernation !== null) state = `hibernation: ${w.originalHibernation}`;
+                return `<div class="flex items-center gap-2 text-sm">
+                    <span class="text-slate-500">${w.kind}</span>
+                    <span class="text-slate-200">${w.name}</span>
+                    ${state ? `<span class="text-slate-500">(${state})</span>` : ''}
+                </div>`;
+            }).join('');
+
+            const transition = s.lastTransitionTime
+                ? `<span class="text-xs text-slate-500">Last transition: ${new Date(s.lastTransitionTime).toLocaleString()}</span>`
+                : '';
+
+            return `<div class="bg-slate-800 rounded-lg p-4 border border-slate-700 mb-3">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-slate-500">${s.namespace}/</span>
+                        <span class="font-medium text-white">${s.name}</span>
+                        ${badge}
+                    </div>
+                    <div class="text-sm text-slate-400">${s.start} - ${s.end} ${s.timezone} ${s.daysDisplay ? '(' + s.daysDisplay + ')' : ''}</div>
+                </div>
+                ${selector.length > 0 ? `<div class="text-xs text-slate-500 mb-2">${selector.join(' | ')}</div>` : ''}
+                ${transition}
+                ${workloads ? `<div class="mt-2 space-y-1 border-t border-slate-700 pt-2">${workloads}</div>` : ''}
+            </div>`;
+        }).join('');
+    }
+
+    function renderIdleDetectors(detectors) {
+        const section = document.getElementById('idle-section');
+        const container = document.getElementById('idle-container');
+        if (detectors.length === 0) { section.classList.add('hidden'); return; }
+        section.classList.remove('hidden');
+
+        container.innerHTML = detectors.map(d => {
+            const actionBadge = d.action === 'scale'
+                ? '<span class="badge-scale text-xs font-medium px-2 py-0.5 rounded-full">SCALE</span>'
+                : '<span class="badge-alert text-xs font-medium px-2 py-0.5 rounded-full">ALERT</span>';
+
+            const thresholds = [];
+            if (d.cpuPercent !== null && d.cpuPercent !== undefined) thresholds.push(`CPU < ${d.cpuPercent}%`);
+            if (d.memoryPercent !== null && d.memoryPercent !== undefined) thresholds.push(`Mem < ${d.memoryPercent}%`);
+
+            const idle = (d.idleWorkloads || []).map(w =>
+                `<div class="text-sm"><span class="text-slate-500">${w.kind}</span> <span class="text-amber-300">${w.name}</span> <span class="text-xs text-slate-500">idle since ${new Date(w.idleSince).toLocaleString()}</span></div>`
+            ).join('');
+
+            const scaled = (d.scaledWorkloads || []).map(w => {
+                let state = '';
+                if (w.originalReplicas !== undefined && w.originalReplicas !== null) state = `was ${w.originalReplicas} replicas`;
+                return `<div class="text-sm"><span class="text-slate-500">${w.kind}</span> <span class="text-red-300">${w.name}</span> ${state ? `<span class="text-xs text-slate-500">(${state})</span>` : ''}</div>`;
+            }).join('');
+
+            return `<div class="bg-slate-800 rounded-lg p-4 border border-slate-700 mb-3">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-slate-500">${d.namespace}/</span>
+                        <span class="font-medium text-white">${d.name}</span>
+                        ${actionBadge}
+                    </div>
+                    <div class="text-sm text-slate-400">${thresholds.join(', ')} | idle ${d.idleDuration}</div>
+                </div>
+                ${idle ? `<div class="mt-2 border-t border-slate-700 pt-2"><div class="text-xs text-amber-400 mb-1">Idle Workloads</div>${idle}</div>` : ''}
+                ${scaled ? `<div class="mt-2 border-t border-slate-700 pt-2"><div class="text-xs text-red-400 mb-1">Scaled Down</div>${scaled}</div>` : ''}
+            </div>`;
+        }).join('');
+    }
+
+    async function refresh() {
+        try {
+            const [overview, schedules, detectors] = await Promise.all([
+                fetchJSON('/api/overview'),
+                fetchJSON('/api/schedules'),
+                fetchJSON('/api/idle-detectors'),
+            ]);
+            renderStats(overview);
+            renderTimeline(schedules);
+            renderSchedules(schedules);
+            renderIdleDetectors(detectors);
+            document.getElementById('refresh-status').textContent = 'updated ' + new Date().toLocaleTimeString();
+        } catch (err) {
+            console.error('refresh failed:', err);
+            document.getElementById('refresh-status').textContent = 'refresh failed';
+        }
+    }
+
+    refresh();
+    setInterval(refresh, REFRESH_INTERVAL);
+    </script>
+</body>
+</html>
