@@ -7,8 +7,13 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	ktesting "k8s.io/client-go/testing"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
+	metricsfake "k8s.io/metrics/pkg/client/clientset/versioned/fake"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -608,7 +613,7 @@ func TestIdleDetector_ScaleDownDeployment_AlreadyZero(t *testing.T) {
 	}
 }
 
-func TestIdleDetector_Reconcile_MetricsStubReturnsNoIdle(t *testing.T) {
+func TestIdleDetector_Reconcile_NilMetricsClientReturnsNoIdle(t *testing.T) {
 	ctx := context.Background()
 	scheme := newTestScheme()
 	namespace := "test-namespace"
@@ -657,8 +662,9 @@ func TestIdleDetector_Reconcile_MetricsStubReturnsNoIdle(t *testing.T) {
 		Build()
 
 	reconciler := &IdleDetectorReconciler{
-		Client: fakeClient,
-		Scheme: scheme,
+		Client:        fakeClient,
+		Scheme:        scheme,
+		MetricsClient: nil, // nil = degraded mode
 	}
 
 	result, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -676,13 +682,13 @@ func TestIdleDetector_Reconcile_MetricsStubReturnsNoIdle(t *testing.T) {
 		t.Errorf("Expected requeue after 5m, got %v", result.RequeueAfter)
 	}
 
-	// Deployment should NOT be scaled down (metrics stub returns not idle)
+	// Deployment should NOT be scaled down (nil MetricsClient returns not idle)
 	var updatedDeploy appsv1.Deployment
 	if err := fakeClient.Get(ctx, types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}, &updatedDeploy); err != nil {
 		t.Fatalf("Failed to get deployment: %v", err)
 	}
 	if *updatedDeploy.Spec.Replicas != 3 {
-		t.Errorf("Expected replicas = 3 (unchanged, stub returns not idle), got %d", *updatedDeploy.Spec.Replicas)
+		t.Errorf("Expected replicas = 3 (unchanged, nil MetricsClient returns not idle), got %d", *updatedDeploy.Spec.Replicas)
 	}
 
 	// Status should show no idle workloads
@@ -691,7 +697,7 @@ func TestIdleDetector_Reconcile_MetricsStubReturnsNoIdle(t *testing.T) {
 		t.Fatalf("Failed to get detector: %v", err)
 	}
 	if len(updatedDetector.Status.IdleWorkloads) != 0 {
-		t.Errorf("Expected 0 idle workloads (stub returns not idle), got %d", len(updatedDetector.Status.IdleWorkloads))
+		t.Errorf("Expected 0 idle workloads (nil MetricsClient returns not idle), got %d", len(updatedDetector.Status.IdleWorkloads))
 	}
 }
 
@@ -1086,7 +1092,7 @@ func TestIdleDetector_Reconcile_NoMatchLabelsWithMatchNames(t *testing.T) {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
-	// Deployment should still be running (metrics stub returns not-idle),
+	// Deployment should still be running (nil MetricsClient returns not-idle),
 	// but this verifies that having only MatchNames (no MatchLabels) works without error
 	var updatedDeploy appsv1.Deployment
 	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "prod-api", Namespace: namespace}, &updatedDeploy); err != nil {
@@ -1094,5 +1100,580 @@ func TestIdleDetector_Reconcile_NoMatchLabelsWithMatchNames(t *testing.T) {
 	}
 	if *updatedDeploy.Spec.Replicas != 3 {
 		t.Errorf("Expected replicas = 3, got %d", *updatedDeploy.Spec.Replicas)
+	}
+}
+
+// --- Test helpers for metrics tests ---
+
+func makePod(name, namespace string, cpuReq, memReq string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:  "app",
+					Image: "nginx",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse(cpuReq),
+							corev1.ResourceMemory: resource.MustParse(memReq),
+						},
+					},
+				},
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+func makePodNoRequests(name, namespace string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Name: "app", Image: "nginx"},
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+func makePodMetrics(name, namespace, cpuUsage, memUsage string) *metricsv1beta1.PodMetrics {
+	return &metricsv1beta1.PodMetrics{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Containers: []metricsv1beta1.ContainerMetrics{
+			{
+				Name: "app",
+				Usage: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse(cpuUsage),
+					corev1.ResourceMemory: resource.MustParse(memUsage),
+				},
+			},
+		},
+	}
+}
+
+func int32Ptr(i int32) *int32 { return &i }
+
+// newFakeMetricsClient creates a fake metrics client that serves the given PodMetrics
+// via a reactor (needed because the fake tracker stores objects under "podmetricses"
+// while the typed client queries resource "pods").
+func newFakeMetricsClient(podMetrics ...metricsv1beta1.PodMetrics) *metricsfake.Clientset {
+	fc := metricsfake.NewSimpleClientset()
+	fc.PrependReactor("list", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+		la := action.(ktesting.ListAction)
+		ns := la.GetNamespace()
+		var filtered []metricsv1beta1.PodMetrics
+		for _, pm := range podMetrics {
+			if ns == "" || pm.Namespace == ns {
+				filtered = append(filtered, pm)
+			}
+		}
+		return true, &metricsv1beta1.PodMetricsList{Items: filtered}, nil
+	})
+	return fc
+}
+
+// --- Unit tests for computeUsagePercent ---
+
+func TestComputeUsagePercent(t *testing.T) {
+	tests := []struct {
+		name     string
+		pods     []corev1.Pod
+		metrics  []metricsv1beta1.PodMetrics
+		wantCPU  float64
+		wantMem  float64
+		wantData bool
+	}{
+		{
+			name: "single pod low usage",
+			pods: []corev1.Pod{*makePod("pod-1", "ns", "1000m", "1Gi")},
+			metrics: []metricsv1beta1.PodMetrics{
+				*makePodMetrics("pod-1", "ns", "50m", "100Mi"),
+			},
+			wantCPU:  5,        // 50m / 1000m = 5%
+			wantMem:  9.765625, // 100Mi / 1024Mi ≈ 9.77%
+			wantData: true,
+		},
+		{
+			name: "multi-pod aggregate",
+			pods: []corev1.Pod{
+				*makePod("pod-1", "ns", "500m", "512Mi"),
+				*makePod("pod-2", "ns", "500m", "512Mi"),
+			},
+			metrics: []metricsv1beta1.PodMetrics{
+				*makePodMetrics("pod-1", "ns", "100m", "128Mi"),
+				*makePodMetrics("pod-2", "ns", "100m", "128Mi"),
+			},
+			wantCPU:  20, // 200m / 1000m = 20%
+			wantMem:  25, // 256Mi / 1024Mi = 25%
+			wantData: true,
+		},
+		{
+			name:     "no requests returns no data",
+			pods:     []corev1.Pod{*makePodNoRequests("pod-1", "ns")},
+			metrics:  []metricsv1beta1.PodMetrics{*makePodMetrics("pod-1", "ns", "50m", "100Mi")},
+			wantCPU:  0,
+			wantMem:  0,
+			wantData: false,
+		},
+		{
+			name:     "no matching metrics returns no data",
+			pods:     []corev1.Pod{*makePod("pod-1", "ns", "1000m", "1Gi")},
+			metrics:  []metricsv1beta1.PodMetrics{*makePodMetrics("other-pod", "ns", "50m", "100Mi")},
+			wantCPU:  0,
+			wantMem:  0,
+			wantData: false,
+		},
+		{
+			name:     "empty metrics list returns no data",
+			pods:     []corev1.Pod{*makePod("pod-1", "ns", "1000m", "1Gi")},
+			metrics:  nil,
+			wantCPU:  0,
+			wantMem:  0,
+			wantData: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cpuPct, memPct, hasData := computeUsagePercent(tt.pods, tt.metrics)
+			if hasData != tt.wantData {
+				t.Errorf("hasData = %v, want %v", hasData, tt.wantData)
+			}
+			if tt.wantData {
+				// Allow small floating point tolerance
+				if diff := cpuPct - tt.wantCPU; diff > 0.1 || diff < -0.1 {
+					t.Errorf("cpuPct = %v, want %v", cpuPct, tt.wantCPU)
+				}
+				if diff := memPct - tt.wantMem; diff > 0.1 || diff < -0.1 {
+					t.Errorf("memPct = %v, want %v", memPct, tt.wantMem)
+				}
+			}
+		})
+	}
+}
+
+// --- Unit tests for isIdleByThresholds ---
+
+func TestIsIdleByThresholds(t *testing.T) {
+	tests := []struct {
+		name       string
+		cpuPct     float64
+		memPct     float64
+		thresholds slumlordv1alpha1.IdleThresholds
+		wantIdle   bool
+	}{
+		{
+			name:   "both below thresholds",
+			cpuPct: 5, memPct: 10,
+			thresholds: slumlordv1alpha1.IdleThresholds{CPUPercent: int32Ptr(20), MemoryPercent: int32Ptr(30)},
+			wantIdle:   true,
+		},
+		{
+			name:   "CPU above threshold",
+			cpuPct: 25, memPct: 10,
+			thresholds: slumlordv1alpha1.IdleThresholds{CPUPercent: int32Ptr(20), MemoryPercent: int32Ptr(30)},
+			wantIdle:   false,
+		},
+		{
+			name:   "memory above threshold",
+			cpuPct: 5, memPct: 35,
+			thresholds: slumlordv1alpha1.IdleThresholds{CPUPercent: int32Ptr(20), MemoryPercent: int32Ptr(30)},
+			wantIdle:   false,
+		},
+		{
+			name:   "only CPU threshold set and below",
+			cpuPct: 5, memPct: 90,
+			thresholds: slumlordv1alpha1.IdleThresholds{CPUPercent: int32Ptr(20)},
+			wantIdle:   true,
+		},
+		{
+			name:   "only memory threshold set and below",
+			cpuPct: 90, memPct: 5,
+			thresholds: slumlordv1alpha1.IdleThresholds{MemoryPercent: int32Ptr(20)},
+			wantIdle:   true,
+		},
+		{
+			name:   "only CPU threshold set and above",
+			cpuPct: 25, memPct: 5,
+			thresholds: slumlordv1alpha1.IdleThresholds{CPUPercent: int32Ptr(20)},
+			wantIdle:   false,
+		},
+		{
+			name:       "neither threshold set",
+			cpuPct:     5,
+			memPct:     5,
+			thresholds: slumlordv1alpha1.IdleThresholds{},
+			wantIdle:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isIdleByThresholds(tt.cpuPct, tt.memPct, tt.thresholds)
+			if got != tt.wantIdle {
+				t.Errorf("isIdleByThresholds(%v, %v) = %v, want %v", tt.cpuPct, tt.memPct, got, tt.wantIdle)
+			}
+		})
+	}
+}
+
+// --- Integration tests for checkWorkloadMetrics ---
+
+func TestCheckWorkloadMetrics_DetectsIdle(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	replicas := int32(1)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "idle-deploy",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "app",
+							Image: "nginx",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("1000m"),
+									corev1.ResourceMemory: resource.MustParse("1Gi"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	pod := makePod("idle-deploy-pod-1", namespace, "1000m", "1Gi")
+	pod.Labels = map[string]string{"app": "test"}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deploy, pod).
+		Build()
+
+	// Low CPU/memory usage — should be idle
+	fakeMetrics := newFakeMetricsClient(
+		*makePodMetrics("idle-deploy-pod-1", namespace, "10m", "50Mi"),
+	)
+
+	reconciler := &IdleDetectorReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		MetricsClient: fakeMetrics,
+	}
+
+	thresholds := slumlordv1alpha1.IdleThresholds{
+		CPUPercent:    int32Ptr(20),
+		MemoryPercent: int32Ptr(20),
+	}
+
+	isIdle, cpuPct, memPct := reconciler.checkWorkloadMetrics(ctx, "Deployment", "idle-deploy", namespace, thresholds)
+	if !isIdle {
+		t.Error("Expected workload to be detected as idle")
+	}
+	if cpuPct == nil || *cpuPct > 5 {
+		t.Errorf("Expected low CPU percent, got %v", cpuPct)
+	}
+	if memPct == nil || *memPct > 10 {
+		t.Errorf("Expected low memory percent, got %v", memPct)
+	}
+}
+
+func TestCheckWorkloadMetrics_NotIdle(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	replicas := int32(1)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "busy-deploy",
+			Namespace: namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "busy"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "busy"}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "app",
+							Image: "nginx",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("1000m"),
+									corev1.ResourceMemory: resource.MustParse("1Gi"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "busy-deploy-pod-1",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "busy"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:  "app",
+					Image: "nginx",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("1000m"),
+							corev1.ResourceMemory: resource.MustParse("1Gi"),
+						},
+					},
+				},
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deploy, pod).
+		Build()
+
+	// High usage — should NOT be idle
+	fakeMetrics := newFakeMetricsClient(
+		*makePodMetrics("busy-deploy-pod-1", namespace, "800m", "900Mi"),
+	)
+
+	reconciler := &IdleDetectorReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		MetricsClient: fakeMetrics,
+	}
+
+	thresholds := slumlordv1alpha1.IdleThresholds{
+		CPUPercent:    int32Ptr(20),
+		MemoryPercent: int32Ptr(20),
+	}
+
+	isIdle, _, _ := reconciler.checkWorkloadMetrics(ctx, "Deployment", "busy-deploy", namespace, thresholds)
+	if isIdle {
+		t.Error("Expected workload to NOT be detected as idle (high usage)")
+	}
+}
+
+func TestCheckWorkloadMetrics_NilMetricsClient(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		Build()
+
+	reconciler := &IdleDetectorReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		MetricsClient: nil,
+	}
+
+	thresholds := slumlordv1alpha1.IdleThresholds{
+		CPUPercent:    int32Ptr(20),
+		MemoryPercent: int32Ptr(20),
+	}
+
+	isIdle, cpuPct, memPct := reconciler.checkWorkloadMetrics(ctx, "Deployment", "any", namespace, thresholds)
+	if isIdle {
+		t.Error("Expected not-idle when MetricsClient is nil")
+	}
+	if cpuPct != nil || memPct != nil {
+		t.Error("Expected nil percentages when MetricsClient is nil")
+	}
+}
+
+// --- Integration tests for checkCronJobMetrics ---
+
+func TestCheckCronJobMetrics_NoActiveJobs(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// CronJob with no active Jobs
+	suspend := false
+	cj := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cj",
+			Namespace: namespace,
+		},
+		Spec: batchv1.CronJobSpec{
+			Schedule: "*/5 * * * *",
+			Suspend:  &suspend,
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							RestartPolicy: corev1.RestartPolicyOnFailure,
+							Containers:    []corev1.Container{{Name: "test", Image: "busybox"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cj).
+		Build()
+
+	fakeMetrics := newFakeMetricsClient()
+
+	reconciler := &IdleDetectorReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		MetricsClient: fakeMetrics,
+	}
+
+	thresholds := slumlordv1alpha1.IdleThresholds{
+		CPUPercent:    int32Ptr(20),
+		MemoryPercent: int32Ptr(20),
+	}
+
+	isIdle, cpuPct, memPct := reconciler.checkCronJobMetrics(ctx, "test-cj", namespace, thresholds)
+	if isIdle {
+		t.Error("Expected not-idle when there are no active Jobs")
+	}
+	if cpuPct != nil || memPct != nil {
+		t.Error("Expected nil percentages when no active Jobs")
+	}
+}
+
+func TestCheckCronJobMetrics_WithActiveJob(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// Active Job owned by CronJob
+	trueVal := true
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cj-12345",
+			Namespace: namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: "batch/v1",
+					Kind:       "CronJob",
+					Name:       "test-cj",
+					Controller: &trueVal,
+				},
+			},
+		},
+		Spec: batchv1.JobSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"job-name": "test-cj-12345"},
+			},
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyOnFailure,
+					Containers: []corev1.Container{
+						{
+							Name:  "worker",
+							Image: "busybox",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("500m"),
+									corev1.ResourceMemory: resource.MustParse("256Mi"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Status: batchv1.JobStatus{
+			Active: 1,
+		},
+	}
+
+	// Running pod for the Job
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cj-12345-pod",
+			Namespace: namespace,
+			Labels:    map[string]string{"job-name": "test-cj-12345"},
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyOnFailure,
+			Containers: []corev1.Container{
+				{
+					Name:  "worker",
+					Image: "busybox",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("500m"),
+							corev1.ResourceMemory: resource.MustParse("256Mi"),
+						},
+					},
+				},
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(job, pod).
+		Build()
+
+	// Low usage — should detect idle
+	fakeMetrics := newFakeMetricsClient(
+		*makePodMetrics("test-cj-12345-pod", namespace, "10m", "20Mi"),
+	)
+
+	reconciler := &IdleDetectorReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		MetricsClient: fakeMetrics,
+	}
+
+	thresholds := slumlordv1alpha1.IdleThresholds{
+		CPUPercent:    int32Ptr(20),
+		MemoryPercent: int32Ptr(20),
+	}
+
+	isIdle, cpuPct, memPct := reconciler.checkCronJobMetrics(ctx, "test-cj", namespace, thresholds)
+	if !isIdle {
+		t.Error("Expected CronJob to be detected as idle (low usage active Job)")
+	}
+	if cpuPct == nil || *cpuPct > 5 {
+		t.Errorf("Expected low CPU percent, got %v", cpuPct)
+	}
+	if memPct == nil || *memPct > 10 {
+		t.Errorf("Expected low memory percent, got %v", memPct)
 	}
 }

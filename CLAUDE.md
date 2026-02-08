@@ -63,7 +63,7 @@ make uninstall
   - `spec.action`: `alert` (report only) or `scale` (auto-scale to zero)
   - `status.idleWorkloads`: Currently detected idle workloads with timestamps
   - `status.scaledWorkloads`: Workloads scaled down with original state for restoration
-  - **Note**: Metrics collection is stubbed — always returns not-idle. Requires metrics-server/Prometheus integration.
+  - **Note**: Requires metrics-server in the cluster. Without it, runs in degraded mode (always returns not-idle).
 
 ### Controller (internal/controller/)
 

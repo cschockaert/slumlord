@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-02-08
+
+### Added
+
+- Metrics-server integration for idle detection (CPU/memory usage via `k8s.io/metrics` PodMetrics API)
+- `getPodsForWorkload` helper to resolve Deployment/StatefulSet pod selectors
+- `computeUsagePercent` aggregates CPU/memory usage vs requests across all pods
+- CronJob idle detection via active Jobs' running pod metrics
+- Graceful degradation: nil MetricsClient runs in safe mode (always returns not-idle)
+- RBAC permissions for pods and jobs resources
+- Unit tests for `computeUsagePercent` and `isIdleByThresholds`
+- Integration tests for `checkWorkloadMetrics` and `checkCronJobMetrics` with fake metrics client
+
+### Changed
+
+- Replaced stub `checkWorkloadMetrics` and `checkCronJobMetrics` with real metrics-server queries
+- Added `MetricsClient` field to `IdleDetectorReconciler`
+- Wired metrics clientset creation in `cmd/main.go`
+
 ## [2.1.0] - 2026-02-08
 
 ### Added
@@ -67,7 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.1.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.2.0...HEAD
+[2.2.0]: https://github.com/cschockaert/slumlord/compare/2.1.0...2.2.0
 [2.1.0]: https://github.com/cschockaert/slumlord/compare/2.0.1...2.1.0
 [2.0.1]: https://github.com/cschockaert/slumlord/compare/2.0.0...2.0.1
 [2.0.0]: https://github.com/cschockaert/slumlord/compare/1.0.0...2.0.0

@@ -8,6 +8,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -68,9 +69,19 @@ func main() {
 	}
 
 	if enableIdleDetector {
+		// Create metrics clientset for querying metrics-server
+		var mc metricsclient.Interface
+		metricsClientset, metricsErr := metricsclient.NewForConfig(mgr.GetConfig())
+		if metricsErr != nil {
+			setupLog.Error(metricsErr, "failed to create metrics client, idle detector will run in degraded mode")
+		} else {
+			mc = metricsClientset
+		}
+
 		if err = (&controller.IdleDetectorReconciler{
-			Client: mgr.GetClient(),
-			Scheme: mgr.GetScheme(),
+			Client:        mgr.GetClient(),
+			Scheme:        mgr.GetScheme(),
+			MetricsClient: mc,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "SlumlordIdleDetector")
 			os.Exit(1)
