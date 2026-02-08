@@ -20,7 +20,7 @@ jobs:
           go-version: '1.22'
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: go
 
@@ -28,4 +28,4 @@ jobs:
         run: go build ./cmd/main.go
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
