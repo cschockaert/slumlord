@@ -8,8 +8,13 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
+	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -30,7 +35,8 @@ var supportedIdleDetectorTypes = map[string]bool{
 // IdleDetectorReconciler reconciles a SlumlordIdleDetector object
 type IdleDetectorReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme        *runtime.Scheme
+	MetricsClient metricsclient.Interface // nil = degraded mode (no metrics)
 }
 
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordidledetectors,verbs=get;list;watch;create;update;patch;delete
@@ -39,6 +45,8 @@ type IdleDetectorReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
 // +kubebuilder:rbac:groups=metrics.k8s.io,resources=pods,verbs=get;list
 
 // Reconcile handles the reconciliation loop for SlumlordIdleDetector
@@ -88,8 +96,9 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
-	// Warn that metrics collection is not yet implemented
-	logger.V(1).Info("Metrics collection is not yet implemented; idle detection uses stubs that always return not-idle")
+	if r.MetricsClient == nil {
+		logger.V(1).Info("MetricsClient is nil; idle detection running in degraded mode (always returns not-idle)")
+	}
 
 	// Parse idle duration
 	idleDuration, err := time.ParseDuration(detector.Spec.IdleDuration)
@@ -285,20 +294,237 @@ func (r *IdleDetectorReconciler) detectIdleWorkloads(ctx context.Context, detect
 	return idleWorkloads, nil
 }
 
-// checkWorkloadMetrics checks if a workload is idle based on resource usage
-// TODO: This is a stub - implement actual metrics collection from metrics-server or Prometheus
+// checkWorkloadMetrics checks if a Deployment/StatefulSet is idle based on resource usage.
+// Returns (isIdle, cpuPercent, memPercent). Gracefully returns not-idle when metrics are unavailable.
 func (r *IdleDetectorReconciler) checkWorkloadMetrics(ctx context.Context, kind, name, namespace string, thresholds slumlordv1alpha1.IdleThresholds) (bool, *int32, *int32) {
-	// TODO: Implement metrics collection via metrics-server API or Prometheus
-	// For now, return false (not idle) to avoid accidental scaling
-	return false, nil, nil
+	logger := log.FromContext(ctx)
+
+	if r.MetricsClient == nil || (thresholds.CPUPercent == nil && thresholds.MemoryPercent == nil) {
+		return false, nil, nil
+	}
+
+	pods, err := r.getPodsForWorkload(ctx, kind, name, namespace)
+	if err != nil {
+		logger.V(1).Info("Failed to get pods for workload", "kind", kind, "name", name, "error", err)
+		return false, nil, nil
+	}
+	if len(pods) == 0 {
+		return false, nil, nil
+	}
+
+	podMetricsList, err := r.MetricsClient.MetricsV1beta1().PodMetricses(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		logger.V(1).Info("Failed to list pod metrics", "namespace", namespace, "error", err)
+		return false, nil, nil
+	}
+
+	cpuPct, memPct, hasData := computeUsagePercent(pods, podMetricsList.Items)
+	if !hasData {
+		return false, nil, nil
+	}
+
+	cpuInt := int32(cpuPct)
+	memInt := int32(memPct)
+	idle := isIdleByThresholds(cpuPct, memPct, thresholds)
+	return idle, &cpuInt, &memInt
 }
 
-// checkCronJobMetrics checks if a CronJob is idle
-// TODO: This is a stub - implement actual idle detection for CronJobs
+// checkCronJobMetrics checks if a CronJob is idle by examining its active Jobs' pod metrics.
+// Returns not-idle when there are no active Jobs (no data = safe default).
 func (r *IdleDetectorReconciler) checkCronJobMetrics(ctx context.Context, name, namespace string, thresholds slumlordv1alpha1.IdleThresholds) (bool, *int32, *int32) {
-	// TODO: Implement CronJob idle detection
-	// For now, return false (not idle) to avoid accidental suspension
-	return false, nil, nil
+	logger := log.FromContext(ctx)
+
+	if r.MetricsClient == nil || (thresholds.CPUPercent == nil && thresholds.MemoryPercent == nil) {
+		return false, nil, nil
+	}
+
+	// List Jobs in namespace owned by this CronJob
+	var jobList batchv1.JobList
+	if err := r.List(ctx, &jobList, client.InNamespace(namespace)); err != nil {
+		logger.V(1).Info("Failed to list jobs", "namespace", namespace, "error", err)
+		return false, nil, nil
+	}
+
+	// Filter active Jobs owned by this CronJob
+	var activePods []corev1.Pod
+	for i := range jobList.Items {
+		job := &jobList.Items[i]
+		if !isOwnedByCronJob(job, name) {
+			continue
+		}
+		// Only consider active Jobs (not completed/failed)
+		if job.Status.Active == 0 {
+			continue
+		}
+		// Get running pods for this Job
+		selector, err := metav1.LabelSelectorAsSelector(job.Spec.Selector)
+		if err != nil {
+			continue
+		}
+		var podList corev1.PodList
+		if err := r.List(ctx, &podList, client.InNamespace(namespace), client.MatchingLabelsSelector{Selector: selector}); err != nil {
+			continue
+		}
+		for j := range podList.Items {
+			if podList.Items[j].Status.Phase == corev1.PodRunning {
+				activePods = append(activePods, podList.Items[j])
+			}
+		}
+	}
+
+	// No active Jobs = no data = not idle (safe default)
+	if len(activePods) == 0 {
+		return false, nil, nil
+	}
+
+	podMetricsList, err := r.MetricsClient.MetricsV1beta1().PodMetricses(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		logger.V(1).Info("Failed to list pod metrics", "namespace", namespace, "error", err)
+		return false, nil, nil
+	}
+
+	cpuPct, memPct, hasData := computeUsagePercent(activePods, podMetricsList.Items)
+	if !hasData {
+		return false, nil, nil
+	}
+
+	cpuInt := int32(cpuPct)
+	memInt := int32(memPct)
+	idle := isIdleByThresholds(cpuPct, memPct, thresholds)
+	return idle, &cpuInt, &memInt
+}
+
+// isOwnedByCronJob checks if a Job is owned by the named CronJob
+func isOwnedByCronJob(job *batchv1.Job, cronJobName string) bool {
+	for _, ref := range job.OwnerReferences {
+		if ref.Kind == "CronJob" && ref.Name == cronJobName {
+			return true
+		}
+	}
+	return false
+}
+
+// getPodsForWorkload returns running pods for a Deployment or StatefulSet
+func (r *IdleDetectorReconciler) getPodsForWorkload(ctx context.Context, kind, name, namespace string) ([]corev1.Pod, error) {
+	var selector labels.Selector
+
+	switch kind {
+	case "Deployment":
+		var deploy appsv1.Deployment
+		if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &deploy); err != nil {
+			return nil, err
+		}
+		s, err := metav1.LabelSelectorAsSelector(deploy.Spec.Selector)
+		if err != nil {
+			return nil, err
+		}
+		selector = s
+	case "StatefulSet":
+		var sts appsv1.StatefulSet
+		if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &sts); err != nil {
+			return nil, err
+		}
+		s, err := metav1.LabelSelectorAsSelector(sts.Spec.Selector)
+		if err != nil {
+			return nil, err
+		}
+		selector = s
+	default:
+		return nil, fmt.Errorf("unsupported workload kind: %s", kind)
+	}
+
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList, client.InNamespace(namespace), client.MatchingLabelsSelector{Selector: selector}); err != nil {
+		return nil, err
+	}
+
+	var running []corev1.Pod
+	for _, pod := range podList.Items {
+		if pod.Status.Phase == corev1.PodRunning {
+			running = append(running, pod)
+		}
+	}
+	return running, nil
+}
+
+// computeUsagePercent aggregates CPU/memory usage across all pods compared to their requests.
+// Returns (cpuPercent, memPercent, hasData). hasData is false if no matching metrics or no requests found.
+func computeUsagePercent(pods []corev1.Pod, podMetrics []metricsv1beta1.PodMetrics) (float64, float64, bool) {
+	// Build a set of pod names for quick lookup
+	podNames := make(map[string]bool, len(pods))
+	for _, p := range pods {
+		podNames[p.Name] = true
+	}
+
+	// Aggregate requests from pod specs
+	var totalCPUReq, totalMemReq resource.Quantity
+	for _, pod := range pods {
+		for _, c := range pod.Spec.Containers {
+			if req, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+				totalCPUReq.Add(req)
+			}
+			if req, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+				totalMemReq.Add(req)
+			}
+		}
+	}
+
+	// No requests = can't compute percentage
+	if totalCPUReq.IsZero() && totalMemReq.IsZero() {
+		return 0, 0, false
+	}
+
+	// Aggregate actual usage from metrics
+	var totalCPUUsage, totalMemUsage resource.Quantity
+	matched := false
+	for _, pm := range podMetrics {
+		if !podNames[pm.Name] {
+			continue
+		}
+		matched = true
+		for _, c := range pm.Containers {
+			if cpu, ok := c.Usage[corev1.ResourceCPU]; ok {
+				totalCPUUsage.Add(cpu)
+			}
+			if mem, ok := c.Usage[corev1.ResourceMemory]; ok {
+				totalMemUsage.Add(mem)
+			}
+		}
+	}
+
+	if !matched {
+		return 0, 0, false
+	}
+
+	var cpuPct, memPct float64
+	if !totalCPUReq.IsZero() {
+		cpuPct = float64(totalCPUUsage.MilliValue()) / float64(totalCPUReq.MilliValue()) * 100
+	}
+	if !totalMemReq.IsZero() {
+		memPct = float64(totalMemUsage.Value()) / float64(totalMemReq.Value()) * 100
+	}
+
+	return cpuPct, memPct, true
+}
+
+// isIdleByThresholds returns true if usage is below the configured thresholds.
+// Both CPU and memory must be below their thresholds if both are set.
+// If only one is set, only that metric is checked.
+// If neither is set, returns false (not idle).
+func isIdleByThresholds(cpuPct, memPct float64, thresholds slumlordv1alpha1.IdleThresholds) bool {
+	if thresholds.CPUPercent == nil && thresholds.MemoryPercent == nil {
+		return false
+	}
+
+	if thresholds.CPUPercent != nil && thresholds.MemoryPercent != nil {
+		return cpuPct < float64(*thresholds.CPUPercent) && memPct < float64(*thresholds.MemoryPercent)
+	}
+
+	if thresholds.CPUPercent != nil {
+		return cpuPct < float64(*thresholds.CPUPercent)
+	}
+
+	return memPct < float64(*thresholds.MemoryPercent)
 }
 
 // scaleDownIdleWorkloads scales down workloads that have been idle for longer than idleDuration.
