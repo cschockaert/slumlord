@@ -121,22 +121,7 @@ func (r *SleepScheduleReconciler) shouldBeSleepingAt(schedule *slumlordv1alpha1.
 
 	now := t.In(loc)
 
-	// Check if today is in the allowed days
-	if len(schedule.Spec.Schedule.Days) > 0 {
-		today := int(now.Weekday())
-		dayAllowed := false
-		for _, d := range schedule.Spec.Schedule.Days {
-			if d == today {
-				dayAllowed = true
-				break
-			}
-		}
-		if !dayAllowed {
-			return false
-		}
-	}
-
-	// Parse start and end times
+	// Parse start and end times first (needed for overnight day-check logic)
 	startTime, err := time.ParseInLocation("15:04", schedule.Spec.Schedule.Start, loc)
 	if err != nil {
 		return false
@@ -150,8 +135,32 @@ func (r *SleepScheduleReconciler) shouldBeSleepingAt(schedule *slumlordv1alpha1.
 	startTime = time.Date(now.Year(), now.Month(), now.Day(), startTime.Hour(), startTime.Minute(), 0, 0, loc)
 	endTime = time.Date(now.Year(), now.Month(), now.Day(), endTime.Hour(), endTime.Minute(), 0, 0, loc)
 
+	isOvernight := endTime.Before(startTime)
+
+	// Check if the relevant day is in the allowed days.
+	// For overnight schedules, the sleep window belongs to the day it STARTED.
+	// So at 3AM Tuesday (early morning portion), we check Monday (previous day).
+	if len(schedule.Spec.Schedule.Days) > 0 {
+		checkDay := int(now.Weekday())
+		if isOvernight && now.Before(endTime) {
+			// We're in the early morning portion of an overnight schedule.
+			// The sleep started the previous day, so check that day.
+			checkDay = (checkDay + 6) % 7 // equivalent to (checkDay - 1 + 7) % 7
+		}
+		dayAllowed := false
+		for _, d := range schedule.Spec.Schedule.Days {
+			if d == checkDay {
+				dayAllowed = true
+				break
+			}
+		}
+		if !dayAllowed {
+			return false
+		}
+	}
+
 	// Handle overnight schedules (e.g., 22:00 to 06:00)
-	if endTime.Before(startTime) {
+	if isOvernight {
 		// We're in overnight mode
 		return now.After(startTime) || now.Before(endTime)
 	}

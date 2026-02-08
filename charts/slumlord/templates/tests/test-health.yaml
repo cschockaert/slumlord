@@ -1,0 +1,17 @@
+{{- if .Values.metrics.service.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "slumlord.fullname" . }}-test-health"
+  labels:
+    {{- include "slumlord.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['wget']
+      args: ['--spider', '--timeout=5', 'http://{{ include "slumlord.fullname" . }}-metrics:{{ .Values.metrics.port }}/metrics']
+  restartPolicy: Never
+{{- end }}

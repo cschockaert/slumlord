@@ -23,6 +23,8 @@ serviceAccount:
 
 podAnnotations: {}
 
+podLabels: {}
+
 podSecurityContext:
   runAsNonRoot: true
   seccompProfile:
@@ -57,9 +59,23 @@ leaderElection:
 
 # Metrics configuration
 metrics:
-  enabled: true
   port: 8080
+  service:
+    enabled: true
+  serviceMonitor:
+    enabled: false
+    interval: 30s
 
 # Health probes configuration
 health:
   port: 8081
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: false
+  # minAvailable: 1
+  # maxUnavailable: 0
+
+# Network Policy
+networkPolicy:
+  enabled: false

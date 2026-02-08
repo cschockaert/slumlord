@@ -32,18 +32,22 @@ type WorkloadSelector struct {
 // SleepWindow defines the time window for sleeping
 type SleepWindow struct {
 	// Start is the time to start sleeping (cron format for time, e.g., "22:00")
+	// +kubebuilder:validation:Pattern="^([01]?[0-9]|2[0-3]):[0-5][0-9]$"
 	Start string `json:"start"`
 
 	// End is the time to wake up (cron format for time, e.g., "06:00")
+	// +kubebuilder:validation:Pattern="^([01]?[0-9]|2[0-3]):[0-5][0-9]$"
 	End string `json:"end"`
 
 	// Timezone is the timezone for the schedule (e.g., "Europe/Paris", "UTC")
+	// Defaults to UTC if not specified.
 	// +optional
 	Timezone string `json:"timezone,omitempty"`
 
 	// Days specifies which days the schedule applies (0=Sunday, 6=Saturday)
 	// If empty, applies every day
 	// +optional
+	// +kubebuilder:validation:MaxItems=7
 	Days []int `json:"days,omitempty"`
 }
 

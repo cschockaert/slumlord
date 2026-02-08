@@ -1,0 +1,16 @@
+{{- if .Values.leaderElection.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "slumlord.fullname" . }}-leader-election
+  labels:
+    {{- include "slumlord.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "slumlord.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "slumlord.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

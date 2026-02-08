@@ -10,5 +10,10 @@ keywords:
   - cost-optimization
   - sleep-schedule
 home: https://github.com/cschockaert/slumlord
+sources:
+  - https://github.com/cschockaert/slumlord
 maintainers:
   - name: cschockaert
+annotations:
+  artifacthub.io/operator: "true"
+  artifacthub.io/license: Apache-2.0

@@ -71,6 +71,12 @@ deploy: ## Deploy controller to the K8s cluster
 undeploy: ## Undeploy controller from the K8s cluster
 	kubectl delete -f config/
 
+##@ Helm
+
+.PHONY: sync-crds
+sync-crds: manifests ## Sync generated CRDs to Helm chart
+	cp config/crd/*.yaml charts/slumlord/crds/
+
 ##@ Code Generation
 
 .PHONY: generate

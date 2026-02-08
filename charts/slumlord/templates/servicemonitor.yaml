@@ -1,0 +1,15 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "slumlord.fullname" . }}
+  labels:
+    {{- include "slumlord.labels" . | nindent 4 }}
+spec:
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval | default "30s" }}
+  selector:
+    matchLabels:
+      {{- include "slumlord.selectorLabels" . | nindent 6 }}
+{{- end }}
