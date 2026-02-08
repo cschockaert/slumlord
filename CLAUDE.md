@@ -63,6 +63,11 @@ make uninstall
   - On sleep: scales Deployments/StatefulSets to 0, suspends CronJobs
   - On wake: restores original replica counts and suspend states from status
 
+### Helm Chart (charts/slumlord/)
+
+- `version` and `appVersion` in `Chart.yaml` must always match the latest release tag
+- No `v` prefix (plain semver: `2.0.1`, not `v2.0.1`)
+
 ### Key Design Decisions
 
 1. **State stored in status**: Original workload state (replicas, suspend) is stored in `status.managedWorkloads` to survive operator restarts
