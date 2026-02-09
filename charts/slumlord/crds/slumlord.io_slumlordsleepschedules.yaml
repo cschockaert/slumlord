@@ -102,7 +102,7 @@ spec:
                   types:
                     description: |-
                       Types specifies which workload types to target
-                      Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization
+                      Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus
                     items:
                       type: string
                     type: array
@@ -130,7 +130,8 @@ spec:
                   properties:
                     kind:
                       description: Kind is the workload kind (Deployment, StatefulSet,
-                        CronJob, Cluster, HelmRelease, Kustomization)
+                        CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler,
+                        Alertmanager, Prometheus)
                       type: string
                     name:
                       description: Name is the workload name

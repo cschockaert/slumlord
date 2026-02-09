@@ -98,6 +98,19 @@ rules:
       - patch
       - update
       - watch
+  # Prometheus Operator CRDs (ThanosRuler, Alertmanager, Prometheus)
+  - apiGroups:
+      - monitoring.coreos.com
+    resources:
+      - thanosrulers
+      - alertmanagers
+      - prometheuses
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
   # SlumlordIdleDetector read-only (dashboard needs these even when controller is disabled)
   - apiGroups:
       - slumlord.io
