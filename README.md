@@ -22,14 +22,14 @@ Kubernetes operator for cost optimization -- automatically scales down workloads
 - Finalizer ensures workloads are restored on detector deletion
 - Tracks original state for safe restoration
 
-> **Note**: Metrics collection is currently stubbed. The idle detector is safe to deploy but requires a future metrics-server/Prometheus integration to actually detect idle workloads.
+> **Note**: The idle detector requires metrics-server in the cluster. Without it, the operator runs in degraded mode (always returns not-idle).
 
 ## Installation
 
 ### Helm (recommended)
 
 ```bash
-helm install slumlord oci://ghcr.io/cschockaert/charts/slumlord --version 2.2.0
+helm install slumlord oci://ghcr.io/cschockaert/charts/slumlord --version 2.3.0
 ```
 
 ### From source

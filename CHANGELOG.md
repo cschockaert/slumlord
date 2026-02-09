@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-02-09
+
 ### Added
 
+- Embedded dashboard UI served on `:8082` with Tailwind CSS dark theme and auto-refresh
+- API endpoints (`/api/overview`, `/api/schedules`, `/api/idle-detectors`) for schedule visibility
+- Helm chart: dashboard service, optional ingress, network policy
 - SlumlordBinPacker CRD and controller for node consolidation (bin packing)
 - Cluster-scoped resource with optional namespace filter and node selector
 - Two modes: `report` (analyze only) and `consolidate` (evict pods via Eviction API)
@@ -101,7 +106,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.2.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.3.0...HEAD
+[2.3.0]: https://github.com/cschockaert/slumlord/compare/2.2.0...2.3.0
 [2.2.0]: https://github.com/cschockaert/slumlord/compare/2.1.0...2.2.0
 [2.1.0]: https://github.com/cschockaert/slumlord/compare/2.0.1...2.1.0
 [2.0.1]: https://github.com/cschockaert/slumlord/compare/2.0.0...2.0.1
