@@ -24,7 +24,7 @@ type WorkloadSelector struct {
 	MatchNames []string `json:"matchNames,omitempty"`
 
 	// Types specifies which workload types to target
-	// Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization
+	// Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus
 	// +optional
 	Types []string `json:"types,omitempty"`
 }
@@ -71,7 +71,7 @@ type SlumlordSleepScheduleStatus struct {
 
 // ManagedWorkload tracks a workload managed by this schedule
 type ManagedWorkload struct {
-	// Kind is the workload kind (Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization)
+	// Kind is the workload kind (Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus)
 	Kind string `json:"kind"`
 
 	// Name is the workload name

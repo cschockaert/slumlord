@@ -6,6 +6,7 @@ Kubernetes operator for cost optimization -- automatically scales down workloads
 
 **Sleep Schedules** -- scale down workloads on a time-based schedule:
 - Scales Deployments and StatefulSets to zero replicas
+- Scales Prometheus Operator CRDs (ThanosRuler, Alertmanager, Prometheus) to zero replicas
 - Suspends CronJobs, FluxCD HelmReleases and Kustomizations
 - Hibernates CNPG PostgreSQL clusters
 - Timezone-aware scheduling with day-of-week filters
@@ -127,6 +128,30 @@ spec:
 
 > **Important**: When managing FluxCD resources alongside Deployments/StatefulSets, use a wider sleep window for the FluxCD schedule. Suspend Flux reconciliation before scaling workloads, and resume it after restoring them. This prevents Flux from restoring scaled-down workloads during the sleep window.
 
+### Prometheus Operator CRDs
+
+```yaml
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordSleepSchedule
+metadata:
+  name: monitoring-sleep
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - Prometheus
+      - Alertmanager
+      - ThanosRuler
+  schedule:
+    start: "20:00"
+    end: "07:00"
+    timezone: Europe/Paris
+    days: [1, 2, 3, 4, 5]
+```
+
+> **Note**: The Prometheus Operator itself should NOT be scaled down -- only its managed CRs. The operator must be running to reconcile the CRs back up on wake.
+
 ### Idle detection -- alert mode
 
 ```yaml
@@ -177,7 +202,7 @@ spec:
 |-------|------|----------|-------------|
 | `spec.selector.matchLabels` | `map[string]string` | No | Label selector for target workloads |
 | `spec.selector.matchNames` | `[]string` | No | Name patterns (supports wildcards) |
-| `spec.selector.types` | `[]string` | No | Workload types to manage. Valid: `Deployment`, `StatefulSet`, `CronJob`, `Cluster`, `HelmRelease`, `Kustomization`. Default: all types |
+| `spec.selector.types` | `[]string` | No | Workload types to manage. Valid: `Deployment`, `StatefulSet`, `CronJob`, `Cluster`, `HelmRelease`, `Kustomization`, `ThanosRuler`, `Alertmanager`, `Prometheus`. Default: all types |
 | `spec.schedule.start` | `string` | Yes | Sleep start time in `HH:MM` format |
 | `spec.schedule.end` | `string` | Yes | Wake time in `HH:MM` format |
 | `spec.schedule.timezone` | `string` | No | IANA timezone (e.g., `Europe/Paris`). Default: `UTC` |
@@ -216,7 +241,7 @@ default     idle-alert    alert    1h              2026-02-08T12:00:00Z  1d
 The operator runs a reconciliation loop every minute for each SlumlordSleepSchedule resource:
 
 1. Checks if the current time (in the configured timezone) falls within the sleep window
-2. On **sleep**: scales Deployments/StatefulSets to 0, suspends CronJobs, hibernates CNPG clusters, and suspends FluxCD HelmReleases/Kustomizations
+2. On **sleep**: scales Deployments/StatefulSets to 0, scales Prometheus Operator CRDs (ThanosRuler, Alertmanager, Prometheus) to 0, suspends CronJobs, hibernates CNPG clusters, and suspends FluxCD HelmReleases/Kustomizations
 3. On **wake**: restores all workloads to their original state
 4. Original state (replica counts, suspend flags, hibernation annotations) is stored in `status.managedWorkloads` to survive operator restarts
 
@@ -240,6 +265,9 @@ graph LR
     B --> F[CNPG Clusters]
     B --> G[HelmReleases]
     B --> H[Kustomizations]
+    B --> K[ThanosRulers]
+    B --> L[Alertmanagers]
+    B --> M[Prometheuses]
 
     I[SlumlordIdleDetector] --> J[Idle Controller]
     J --> C

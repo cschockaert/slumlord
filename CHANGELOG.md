@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Support for Prometheus Operator CRDs: `ThanosRuler`, `Alertmanager`, `Prometheus` in SlumlordSleepSchedule
+- Generic `sleepReplicaResources`/`wakeReplicaResource` functions for any CRD using `spec.replicas`
+- RBAC permissions for `monitoring.coreos.com` resources (thanosrulers, alertmanagers, prometheuses)
+- Graceful handling when Prometheus Operator CRDs are not installed (skip with log, no crash)
+
 ## [2.4.0] - 2026-02-09
 
 ### Added

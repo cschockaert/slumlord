@@ -46,6 +46,24 @@ var fluxKustomizationGVK = schema.GroupVersionKind{
 	Kind:    "Kustomization",
 }
 
+var promThanosRulerGVK = schema.GroupVersionKind{
+	Group:   "monitoring.coreos.com",
+	Version: "v1",
+	Kind:    "ThanosRuler",
+}
+
+var promAlertmanagerGVK = schema.GroupVersionKind{
+	Group:   "monitoring.coreos.com",
+	Version: "v1",
+	Kind:    "Alertmanager",
+}
+
+var promPrometheusGVK = schema.GroupVersionKind{
+	Group:   "monitoring.coreos.com",
+	Version: "v1",
+	Kind:    "Prometheus",
+}
+
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordsleepschedules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordsleepschedules/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
@@ -54,6 +72,7 @@ var fluxKustomizationGVK = schema.GroupVersionKind{
 // +kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=kustomize.toolkit.fluxcd.io,resources=kustomizations,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=thanosrulers;alertmanagers;prometheuses,verbs=get;list;watch;update;patch
 
 // Reconcile handles the reconciliation loop for SlumlordSleepSchedule
 func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -318,6 +337,23 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 		}
 	}
 
+	// Handle Prometheus Operator CRDs (ThanosRuler, Alertmanager, Prometheus)
+	if r.shouldManageType(schedule, "ThanosRuler") {
+		if err := r.sleepReplicaResources(ctx, schedule, promThanosRulerGVK, "ThanosRuler"); err != nil {
+			return err
+		}
+	}
+	if r.shouldManageType(schedule, "Alertmanager") {
+		if err := r.sleepReplicaResources(ctx, schedule, promAlertmanagerGVK, "Alertmanager"); err != nil {
+			return err
+		}
+	}
+	if r.shouldManageType(schedule, "Prometheus") {
+		if err := r.sleepReplicaResources(ctx, schedule, promPrometheusGVK, "Prometheus"); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -394,6 +430,19 @@ func (r *SleepScheduleReconciler) wakeWorkloads(ctx context.Context, schedule *s
 				return err
 			}
 			logger.Info("Woke CNPG cluster", "name", cluster.GetName())
+
+		case "ThanosRuler":
+			if err := r.wakeReplicaResource(ctx, schedule, managed, promThanosRulerGVK); err != nil {
+				return err
+			}
+		case "Alertmanager":
+			if err := r.wakeReplicaResource(ctx, schedule, managed, promAlertmanagerGVK); err != nil {
+				return err
+			}
+		case "Prometheus":
+			if err := r.wakeReplicaResource(ctx, schedule, managed, promPrometheusGVK); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -507,6 +556,88 @@ func (r *SleepScheduleReconciler) wakeFluxResource(ctx context.Context, schedule
 		return err
 	}
 	logger.Info("Resumed FluxCD resource", "kind", managed.Kind, "name", resource.GetName())
+	return nil
+}
+
+// sleepReplicaResources scales down CRDs that use spec.replicas (e.g., Prometheus Operator CRDs)
+func (r *SleepScheduleReconciler) sleepReplicaResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, gvk schema.GroupVersionKind, kind string) error {
+	logger := log.FromContext(ctx)
+
+	resourceList := &unstructured.UnstructuredList{}
+	resourceList.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   gvk.Group,
+		Version: gvk.Version,
+		Kind:    gvk.Kind + "List",
+	})
+
+	if err := r.List(ctx, resourceList, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			logger.Info("CRD not installed, skipping", "kind", kind)
+			return nil
+		}
+		return err
+	}
+
+	for i := range resourceList.Items {
+		resource := &resourceList.Items[i]
+		spec, _ := resource.Object["spec"].(map[string]interface{})
+		if spec == nil {
+			continue
+		}
+
+		var currentReplicas int32
+		switch v := spec["replicas"].(type) {
+		case int64:
+			currentReplicas = int32(v)
+		case float64:
+			currentReplicas = int32(v)
+		default:
+			continue
+		}
+
+		if currentReplicas > 0 {
+			original := currentReplicas
+			schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
+				Kind:             kind,
+				Name:             resource.GetName(),
+				OriginalReplicas: &original,
+			})
+
+			spec["replicas"] = int64(0)
+			if err := r.Update(ctx, resource); err != nil {
+				return err
+			}
+			logger.Info("Scaled down resource", "kind", kind, "name", resource.GetName(), "originalReplicas", original)
+		}
+	}
+
+	return nil
+}
+
+// wakeReplicaResource restores spec.replicas on a CRD resource
+func (r *SleepScheduleReconciler) wakeReplicaResource(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, managed slumlordv1alpha1.ManagedWorkload, gvk schema.GroupVersionKind) error {
+	logger := log.FromContext(ctx)
+
+	resource := &unstructured.Unstructured{}
+	resource.SetGroupVersionKind(gvk)
+	if err := r.Get(ctx, client.ObjectKey{Namespace: schedule.Namespace, Name: managed.Name}, resource); err != nil {
+		logger.Error(err, "Failed to get resource", "kind", managed.Kind, "name", managed.Name)
+		return nil
+	}
+
+	if managed.OriginalReplicas != nil {
+		spec, _ := resource.Object["spec"].(map[string]interface{})
+		if spec == nil {
+			spec = make(map[string]interface{})
+			resource.Object["spec"] = spec
+		}
+		spec["replicas"] = int64(*managed.OriginalReplicas)
+		if err := r.Update(ctx, resource); err != nil {
+			return err
+		}
+		logger.Info("Scaled up resource", "kind", managed.Kind, "name", managed.Name, "replicas", *managed.OriginalReplicas)
+	}
+
 	return nil
 }
 
