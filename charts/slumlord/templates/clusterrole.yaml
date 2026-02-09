@@ -141,6 +141,76 @@ rules:
       - get
       - list
   {{- end }}
+  # SlumlordNodeDrainPolicy read-only (dashboard needs these even when controller is disabled)
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordnodedrainpolicies
+    verbs:
+      - get
+      - list
+      - watch
+  {{- if .Values.nodeDrain.enabled }}
+  # SlumlordNodeDrainPolicy write access (controller only)
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordnodedrainpolicies
+    verbs:
+      - create
+      - delete
+      - patch
+      - update
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordnodedrainpolicies/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordnodedrainpolicies/finalizers
+    verbs:
+      - update
+  # Nodes (drain: cordon, uncordon, delete)
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+      - delete
+  # Pods (drain: list for analysis and eviction)
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - pods/eviction
+    verbs:
+      - create
+  # Events (drain: emit events)
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  {{- end }}
   {{- if .Values.binPacker.enabled }}
   # SlumlordBinPacker resources
   - apiGroups:

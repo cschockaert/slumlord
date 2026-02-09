@@ -36,6 +36,7 @@ func main() {
 	var enableLeaderElection bool
 	var enableIdleDetector bool
 	var enableBinPacker bool
+	var enableNodeDrain bool
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -47,6 +48,8 @@ func main() {
 		"Enable the idle detector controller (experimental).")
 	flag.BoolVar(&enableBinPacker, "enable-binpacker", false,
 		"Enable the bin packer controller for node consolidation.")
+	flag.BoolVar(&enableNodeDrain, "enable-node-drain", false,
+		"Enable the node drain policy controller.")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -106,6 +109,19 @@ func main() {
 		}
 	} else {
 		setupLog.Info("bin packer controller disabled")
+	}
+
+	if enableNodeDrain {
+		if err = (&controller.NodeDrainPolicyReconciler{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Recorder: mgr.GetEventRecorder("slumlord-node-drain"),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "SlumlordNodeDrainPolicy")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("node drain policy controller disabled")
 	}
 
 	if dashboardAddr != "0" {

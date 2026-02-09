@@ -3,6 +3,7 @@ module github.com/cschockaert/slumlord
 go 1.25.0
 
 require (
+	github.com/robfig/cron/v3 v3.0.1
 	k8s.io/api v0.35.0
 	k8s.io/apimachinery v0.35.0
 	k8s.io/client-go v0.35.0
