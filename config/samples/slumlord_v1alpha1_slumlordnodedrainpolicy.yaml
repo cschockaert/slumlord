@@ -1,0 +1,53 @@
+---
+# Dry-run example: analyze nodes without draining
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordNodeDrainPolicy
+metadata:
+  name: spot-drain-dryrun
+spec:
+  nodeSelector:
+    node-pool: spot
+  thresholds:
+    cpuRequestPercent: 20
+    memoryRequestPercent: 20
+  schedule:
+    cron: "0 2 * * 1-5"
+    timezone: "Europe/Paris"
+  safety:
+    dryRun: true
+    maxNodesPerRun: 3
+    minReadyNodes: 2
+---
+# Active drain: drain underutilized spot nodes during maintenance window
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordNodeDrainPolicy
+metadata:
+  name: spot-drain-nightly
+spec:
+  nodeSelector:
+    node-pool: spot
+  thresholds:
+    cpuRequestPercent: 15
+    memoryRequestPercent: 15
+  schedule:
+    cron: "0 3 * * 1-5"
+    timezone: "Europe/Paris"
+  drain:
+    timeoutSeconds: 600
+    deleteEmptyDirData: true
+    deleteNodeAfterDrain: true
+  safety:
+    maxNodesPerRun: 2
+    minReadyNodes: 3
+---
+# Suspended example: policy is defined but not active
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordNodeDrainPolicy
+metadata:
+  name: drain-suspended
+spec:
+  suspend: true
+  thresholds:
+    cpuRequestPercent: 25
+  schedule:
+    cron: "0 4 * * *"

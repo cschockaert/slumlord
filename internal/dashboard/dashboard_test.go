@@ -263,6 +263,125 @@ func TestIdleDetectorsEmpty(t *testing.T) {
 	}
 }
 
+func TestNodeDrainPoliciesEndpoint(t *testing.T) {
+	cl := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(
+		&slumlordv1alpha1.SlumlordNodeDrainPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "nightly-drain"},
+			Spec: slumlordv1alpha1.SlumlordNodeDrainPolicySpec{
+				Schedule: slumlordv1alpha1.DrainSchedule{
+					Cron:     "0 2 * * 1-5",
+					Timezone: "Europe/Paris",
+				},
+				Thresholds: slumlordv1alpha1.DrainThresholds{
+					CPURequestPercent:    int32Ptr(20),
+					MemoryRequestPercent: int32Ptr(20),
+				},
+				NodeSelector: map[string]string{"pool": "spot"},
+				Safety: slumlordv1alpha1.DrainSafety{
+					DryRun: true,
+				},
+			},
+			Status: slumlordv1alpha1.SlumlordNodeDrainPolicyStatus{
+				TotalNodesDrained: 5,
+			},
+		},
+	).Build()
+
+	srv := NewServer(":0", cl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/node-drain-policies", nil)
+	rec := httptest.NewRecorder()
+	srv.handleNodeDrainPolicies(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var result []NodeDrainPolicyResponse
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 policy, got %d", len(result))
+	}
+	if result[0].Name != "nightly-drain" {
+		t.Errorf("expected name nightly-drain, got %s", result[0].Name)
+	}
+	if result[0].Cron != "0 2 * * 1-5" {
+		t.Errorf("expected cron '0 2 * * 1-5', got %s", result[0].Cron)
+	}
+	if result[0].Timezone != "Europe/Paris" {
+		t.Errorf("expected timezone Europe/Paris, got %s", result[0].Timezone)
+	}
+	if !result[0].DryRun {
+		t.Error("expected dryRun=true")
+	}
+	if result[0].TotalNodesDrained != 5 {
+		t.Errorf("expected 5 drained, got %d", result[0].TotalNodesDrained)
+	}
+}
+
+func TestNodeDrainPoliciesEmpty(t *testing.T) {
+	cl := fake.NewClientBuilder().WithScheme(newScheme()).Build()
+	srv := NewServer(":0", cl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/node-drain-policies", nil)
+	rec := httptest.NewRecorder()
+	srv.handleNodeDrainPolicies(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var result []NodeDrainPolicyResponse
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected 0 policies, got %d", len(result))
+	}
+}
+
+func TestOverviewWithNodeDrainPolicies(t *testing.T) {
+	cl := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(
+		&slumlordv1alpha1.SlumlordNodeDrainPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "drain-1"},
+			Spec: slumlordv1alpha1.SlumlordNodeDrainPolicySpec{
+				Schedule: slumlordv1alpha1.DrainSchedule{Cron: "0 2 * * *"},
+				Thresholds: slumlordv1alpha1.DrainThresholds{
+					CPURequestPercent: int32Ptr(20),
+				},
+			},
+			Status: slumlordv1alpha1.SlumlordNodeDrainPolicyStatus{
+				TotalNodesDrained: 10,
+			},
+		},
+	).Build()
+
+	srv := NewServer(":0", cl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/overview", nil)
+	rec := httptest.NewRecorder()
+	srv.handleOverview(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp OverviewResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.TotalNodeDrainPolicies != 1 {
+		t.Errorf("expected 1 drain policy, got %d", resp.TotalNodeDrainPolicies)
+	}
+	if resp.TotalNodesDrained != 10 {
+		t.Errorf("expected 10 drained, got %d", resp.TotalNodesDrained)
+	}
+}
+
+func int32Ptr(i int32) *int32 { return &i }
+
 func TestStaticFileServing(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(newScheme()).Build()
 	_ = NewServer(":0", cl)

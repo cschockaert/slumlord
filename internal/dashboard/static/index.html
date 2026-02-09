@@ -74,6 +74,12 @@
             <h2 class="text-lg font-semibold text-white mb-4">Idle Detectors</h2>
             <div id="idle-container"></div>
         </div>
+
+        <!-- Node Drain Policies -->
+        <div id="drain-section" class="mb-8 hidden">
+            <h2 class="text-lg font-semibold text-white mb-4">Node Drain Policies</h2>
+            <div id="drain-container"></div>
+        </div>
     </div>
 
     <script>
@@ -228,17 +234,65 @@
         }).join('');
     }
 
+    function renderNodeDrainPolicies(policies) {
+        const section = document.getElementById('drain-section');
+        const container = document.getElementById('drain-container');
+        if (policies.length === 0) { section.classList.add('hidden'); return; }
+        section.classList.remove('hidden');
+
+        container.innerHTML = policies.map(p => {
+            const badges = [];
+            if (p.suspended) badges.push('<span class="badge-sleeping text-xs font-medium px-2 py-0.5 rounded-full">SUSPENDED</span>');
+            if (p.dryRun) badges.push('<span class="badge-alert text-xs font-medium px-2 py-0.5 rounded-full">DRY-RUN</span>');
+            if (!p.suspended && !p.dryRun) badges.push('<span class="badge-awake text-xs font-medium px-2 py-0.5 rounded-full">ACTIVE</span>');
+
+            const thresholds = [];
+            if (p.thresholds.cpuRequestPercent !== null && p.thresholds.cpuRequestPercent !== undefined) thresholds.push(`CPU < ${p.thresholds.cpuRequestPercent}%`);
+            if (p.thresholds.memoryRequestPercent !== null && p.thresholds.memoryRequestPercent !== undefined) thresholds.push(`Mem < ${p.thresholds.memoryRequestPercent}%`);
+
+            const selector = p.nodeSelector && Object.keys(p.nodeSelector).length > 0
+                ? `<div class="text-xs text-slate-500 mb-2">Node selector: ${Object.entries(p.nodeSelector).map(([k,v]) => k+'='+v).join(', ')}</div>`
+                : '';
+
+            const nextRun = p.nextRun ? `Next run: ${new Date(p.nextRun).toLocaleString()}` : '';
+            const lastRun = p.lastRun ? `Last run: ${new Date(p.lastRun.startTime).toLocaleString()} (${p.lastRun.nodesDrained} drained, ${p.lastRun.nodesEvaluated} evaluated)` : 'No runs yet';
+
+            const nodeResults = (p.lastRun && p.lastRun.nodeResults || []).map(r =>
+                `<div class="text-sm"><span class="text-slate-400">${r.name}</span> <span class="text-xs ${r.action === 'failed' ? 'text-red-400' : 'text-emerald-400'}">${r.action}</span> <span class="text-xs text-slate-500">cpu=${r.cpuRequestPercent}% mem=${r.memoryRequestPercent}% pods=${r.podsEvicted}</span></div>`
+            ).join('');
+
+            return `<div class="bg-slate-800 rounded-lg p-4 border border-slate-700 mb-3">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <span class="font-medium text-white">${p.name}</span>
+                        ${badges.join(' ')}
+                    </div>
+                    <div class="text-sm text-slate-400">${p.cron} ${p.timezone} | ${thresholds.join(' OR ')}</div>
+                </div>
+                ${selector}
+                <div class="flex items-center gap-4 text-xs text-slate-500 mb-1">
+                    <span>${lastRun}</span>
+                    ${nextRun ? `<span>${nextRun}</span>` : ''}
+                    <span>Total drained: ${p.totalNodesDrained}</span>
+                </div>
+                ${nodeResults ? `<div class="mt-2 space-y-1 border-t border-slate-700 pt-2">${nodeResults}</div>` : ''}
+            </div>`;
+        }).join('');
+    }
+
     async function refresh() {
         try {
-            const [overview, schedules, detectors] = await Promise.all([
+            const [overview, schedules, detectors, drainPolicies] = await Promise.all([
                 fetchJSON('/api/overview'),
                 fetchJSON('/api/schedules'),
                 fetchJSON('/api/idle-detectors'),
+                fetchJSON('/api/node-drain-policies'),
             ]);
             renderStats(overview);
             renderTimeline(schedules);
             renderSchedules(schedules);
             renderIdleDetectors(detectors);
+            renderNodeDrainPolicies(drainPolicies);
             document.getElementById('refresh-status').textContent = 'updated ' + new Date().toLocaleTimeString();
         } catch (err) {
             console.error('refresh failed:', err);

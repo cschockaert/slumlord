@@ -105,3 +105,7 @@ idleDetector:
 # Bin packer feature for node consolidation
 binPacker:
   enabled: false
+
+# Node drain policy for draining underutilized nodes on a cron schedule
+nodeDrain:
+  enabled: false

@@ -40,6 +40,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/overview", s.handleOverview)
 	mux.HandleFunc("/api/schedules", s.handleSchedules)
 	mux.HandleFunc("/api/idle-detectors", s.handleIdleDetectors)
+	mux.HandleFunc("/api/node-drain-policies", s.handleNodeDrainPolicies)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -70,13 +71,15 @@ func (s *Server) Start(ctx context.Context) error {
 
 // OverviewResponse is the JSON response for GET /api/overview.
 type OverviewResponse struct {
-	TotalSchedules     int `json:"totalSchedules"`
-	SleepingCount      int `json:"sleepingCount"`
-	AwakeCount         int `json:"awakeCount"`
-	ManagedWorkloads   int `json:"managedWorkloads"`
-	TotalIdleDetectors int `json:"totalIdleDetectors"`
-	IdleWorkloads      int `json:"idleWorkloads"`
-	ScaledWorkloads    int `json:"scaledWorkloads"`
+	TotalSchedules         int   `json:"totalSchedules"`
+	SleepingCount          int   `json:"sleepingCount"`
+	AwakeCount             int   `json:"awakeCount"`
+	ManagedWorkloads       int   `json:"managedWorkloads"`
+	TotalIdleDetectors     int   `json:"totalIdleDetectors"`
+	IdleWorkloads          int   `json:"idleWorkloads"`
+	ScaledWorkloads        int   `json:"scaledWorkloads"`
+	TotalNodeDrainPolicies int   `json:"totalNodeDrainPolicies"`
+	TotalNodesDrained      int64 `json:"totalNodesDrained"`
 }
 
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +109,14 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		for _, d := range detectors.Items {
 			resp.IdleWorkloads += len(d.Status.IdleWorkloads)
 			resp.ScaledWorkloads += len(d.Status.ScaledWorkloads)
+		}
+	}
+
+	var drainPolicies slumlordv1alpha1.SlumlordNodeDrainPolicyList
+	if err := s.reader.List(ctx, &drainPolicies); err == nil {
+		resp.TotalNodeDrainPolicies = len(drainPolicies.Items)
+		for _, p := range drainPolicies.Items {
+			resp.TotalNodesDrained += p.Status.TotalNodesDrained
 		}
 	}
 
@@ -222,6 +233,60 @@ func (s *Server) handleIdleDetectors(w http.ResponseWriter, r *http.Request) {
 			dr.LastCheckTime = &t
 		}
 		result = append(result, dr)
+	}
+
+	writeJSON(w, result)
+}
+
+// NodeDrainPolicyResponse is the JSON response for a single node drain policy.
+type NodeDrainPolicyResponse struct {
+	Name              string                           `json:"name"`
+	Cron              string                           `json:"cron"`
+	Timezone          string                           `json:"timezone"`
+	Suspended         bool                             `json:"suspended"`
+	DryRun            bool                             `json:"dryRun"`
+	TotalNodesDrained int64                            `json:"totalNodesDrained"`
+	NextRun           *string                          `json:"nextRun"`
+	LastRun           *slumlordv1alpha1.DrainRunStatus `json:"lastRun"`
+	NodeSelector      map[string]string                `json:"nodeSelector,omitempty"`
+	Thresholds        slumlordv1alpha1.DrainThresholds `json:"thresholds"`
+	Conditions        []string                         `json:"conditions"`
+}
+
+func (s *Server) handleNodeDrainPolicies(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var policies slumlordv1alpha1.SlumlordNodeDrainPolicyList
+	if err := s.reader.List(ctx, &policies); err != nil {
+		writeJSON(w, []NodeDrainPolicyResponse{})
+		return
+	}
+
+	result := make([]NodeDrainPolicyResponse, 0, len(policies.Items))
+	for _, p := range policies.Items {
+		pr := NodeDrainPolicyResponse{
+			Name:              p.Name,
+			Cron:              p.Spec.Schedule.Cron,
+			Timezone:          p.Spec.Schedule.Timezone,
+			Suspended:         p.Spec.Suspend,
+			DryRun:            p.Spec.Safety.DryRun,
+			TotalNodesDrained: p.Status.TotalNodesDrained,
+			LastRun:           p.Status.LastRun,
+			NodeSelector:      p.Spec.NodeSelector,
+			Thresholds:        p.Spec.Thresholds,
+		}
+		if pr.Timezone == "" {
+			pr.Timezone = "UTC"
+		}
+		if p.Status.NextRun != nil {
+			t := p.Status.NextRun.Format(time.RFC3339)
+			pr.NextRun = &t
+		}
+		pr.Conditions = make([]string, 0, len(p.Status.Conditions))
+		for _, c := range p.Status.Conditions {
+			pr.Conditions = append(pr.Conditions, c.Type+"="+string(c.Status)+" ("+c.Reason+")")
+		}
+		result = append(result, pr)
 	}
 
 	writeJSON(w, result)

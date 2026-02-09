@@ -52,6 +52,9 @@ spec:
             {{- if .Values.binPacker.enabled }}
             - --enable-binpacker
             {{- end }}
+            {{- if .Values.nodeDrain.enabled }}
+            - --enable-node-drain
+            {{- end }}
             {{- if .Values.dashboard.enabled }}
             - --dashboard-bind-address=:{{ .Values.dashboard.port }}
             {{- else }}
