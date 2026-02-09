@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-02-09
+
+### Added
+
+- SlumlordNodeDrainPolicy CRD and controller for draining underutilized nodes on a cron schedule
+- Cluster-scoped resource with node selector and OR-logic thresholds (CPU or memory)
+- Cron-based scheduling with timezone support via `robfig/cron/v3`
+- Full drain lifecycle: cordon, evict pods (Eviction API), wait for drain, optionally delete node
+- Safety controls: `maxNodesPerRun`, `minReadyNodes`, `dryRun`, `suspend`
+- Pod filtering: skip DaemonSet, mirror, terminating, emptyDir (configurable), pod selector
+- Kubernetes events for drain lifecycle (DrainStarted, DrainCompleted, DrainFailed, NodeDeleted)
+- Per-node drain results in status with CPU/memory percentages and eviction counts
+- Dashboard: `/api/node-drain-policies` endpoint and Node Drain Policies UI section
+- Helm chart integration with `nodeDrain.enabled` toggle and conditional RBAC
+
 ## [2.3.0] - 2026-02-09
 
 ### Added
@@ -106,7 +121,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.3.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.4.0...HEAD
+[2.4.0]: https://github.com/cschockaert/slumlord/compare/2.3.0...2.4.0
 [2.3.0]: https://github.com/cschockaert/slumlord/compare/2.2.0...2.3.0
 [2.2.0]: https://github.com/cschockaert/slumlord/compare/2.1.0...2.2.0
 [2.1.0]: https://github.com/cschockaert/slumlord/compare/2.0.1...2.1.0
