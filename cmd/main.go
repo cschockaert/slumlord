@@ -115,7 +115,7 @@ func main() {
 		if err = (&controller.NodeDrainPolicyReconciler{
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
-			Recorder: mgr.GetEventRecorderFor("slumlord-node-drain"),
+			Recorder: mgr.GetEventRecorder("slumlord-node-drain"),
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "SlumlordNodeDrainPolicy")
 			os.Exit(1)

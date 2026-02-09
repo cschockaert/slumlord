@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -28,7 +28,7 @@ const nodeDrainFinalizer = "slumlord.io/nodedrain-finalizer"
 type NodeDrainPolicyReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // drainNodeInfo holds computed utilization data for a node during drain analysis
@@ -231,11 +231,11 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			result.Action = "failed"
 			result.Reason = fmt.Sprintf("cordon failed: %v", err)
 			runStatus.NodeResults = append(runStatus.NodeResults, result)
-			r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "CordonFailed", "Failed to cordon node %s: %v", candidate.name, err)
+			r.Recorder.Eventf(&policy, nil, corev1.EventTypeWarning, "CordonFailed", "CordonNode", "Failed to cordon node %s: %v", candidate.name, err)
 			continue
 		}
 
-		r.Recorder.Eventf(&policy, corev1.EventTypeNormal, "DrainStarted", "Started draining node %s", candidate.name)
+		r.Recorder.Eventf(&policy, nil, corev1.EventTypeNormal, "DrainStarted", "DrainNode", "Started draining node %s", candidate.name)
 
 		// Evict pods
 		podsEvicted := int32(0)
@@ -265,7 +265,7 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				result.Action = "failed"
 				result.Reason = "eviction failed and drain timed out"
 				runStatus.NodeResults = append(runStatus.NodeResults, result)
-				r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "DrainFailed", "Failed to drain node %s: eviction error", candidate.name)
+				r.Recorder.Eventf(&policy, nil, corev1.EventTypeWarning, "DrainFailed", "DrainNode", "Failed to drain node %s: eviction error", candidate.name)
 				continue
 			}
 		}
@@ -279,7 +279,7 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			result.Action = "failed"
 			result.Reason = "drain timed out"
 			runStatus.NodeResults = append(runStatus.NodeResults, result)
-			r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "DrainFailed", "Drain timed out for node %s", candidate.name)
+			r.Recorder.Eventf(&policy, nil, corev1.EventTypeWarning, "DrainFailed", "DrainNode", "Drain timed out for node %s", candidate.name)
 			continue
 		}
 
@@ -291,16 +291,16 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if policy.Spec.Drain.DeleteNodeAfterDrain {
 			if err := r.deleteNode(ctx, candidate.name); err != nil {
 				logger.Error(err, "Failed to delete node after drain", "node", candidate.name)
-				r.Recorder.Eventf(&policy, corev1.EventTypeWarning, "NodeDeleteFailed", "Failed to delete node %s: %v", candidate.name, err)
+				r.Recorder.Eventf(&policy, nil, corev1.EventTypeWarning, "NodeDeleteFailed", "DeleteNode", "Failed to delete node %s: %v", candidate.name, err)
 			} else {
 				runStatus.NodesDeleted++
 				result.Action = "deleted"
-				r.Recorder.Eventf(&policy, corev1.EventTypeNormal, "NodeDeleted", "Deleted node %s after drain", candidate.name)
+				r.Recorder.Eventf(&policy, nil, corev1.EventTypeNormal, "NodeDeleted", "DeleteNode", "Deleted node %s after drain", candidate.name)
 			}
 		}
 
 		runStatus.NodeResults = append(runStatus.NodeResults, result)
-		r.Recorder.Eventf(&policy, corev1.EventTypeNormal, "DrainCompleted", "Completed draining node %s (%d pods evicted)", candidate.name, podsEvicted)
+		r.Recorder.Eventf(&policy, nil, corev1.EventTypeNormal, "DrainCompleted", "DrainNode", "Completed draining node %s (%d pods evicted)", candidate.name, podsEvicted)
 
 		// Persist status after each node for safety
 		policy.Status.LastRun = runStatus
