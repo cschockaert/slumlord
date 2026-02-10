@@ -102,7 +102,7 @@ spec:
                   types:
                     description: |-
                       Types specifies which workload types to target
-                      Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus
+                      Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus, MariaDB, MaxScale
                     items:
                       type: string
                     type: array
@@ -131,7 +131,7 @@ spec:
                     kind:
                       description: Kind is the workload kind (Deployment, StatefulSet,
                         CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler,
-                        Alertmanager, Prometheus)
+                        Alertmanager, Prometheus, MariaDB, MaxScale)
                       type: string
                     name:
                       description: Name is the workload name
@@ -147,7 +147,8 @@ spec:
                       type: integer
                     originalSuspend:
                       description: OriginalSuspend stores the suspend state before
-                        sleeping (for CronJob, HelmRelease, Kustomization)
+                        sleeping (for CronJob, HelmRelease, Kustomization, MariaDB,
+                        MaxScale)
                       type: boolean
                   required:
                   - kind

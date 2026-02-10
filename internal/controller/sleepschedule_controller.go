@@ -64,6 +64,18 @@ var promPrometheusGVK = schema.GroupVersionKind{
 	Kind:    "Prometheus",
 }
 
+var mariadbGVK = schema.GroupVersionKind{
+	Group:   "k8s.mariadb.com",
+	Version: "v1alpha1",
+	Kind:    "MariaDB",
+}
+
+var mariadbMaxScaleGVK = schema.GroupVersionKind{
+	Group:   "k8s.mariadb.com",
+	Version: "v1alpha1",
+	Kind:    "MaxScale",
+}
+
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordsleepschedules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordsleepschedules/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
@@ -73,6 +85,7 @@ var promPrometheusGVK = schema.GroupVersionKind{
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=kustomize.toolkit.fluxcd.io,resources=kustomizations,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=thanosrulers;alertmanagers;prometheuses,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=k8s.mariadb.com,resources=mariadbs;maxscales,verbs=get;list;watch;update;patch
 
 // Reconcile handles the reconciliation loop for SlumlordSleepSchedule
 func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -193,16 +206,24 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 	logger := log.FromContext(ctx)
 	schedule.Status.ManagedWorkloads = nil
 
-	// Handle FluxCD HelmReleases (suspend BEFORE scaling workloads to prevent reconciliation)
+	// Suspend operator-managed resources BEFORE scaling workloads to prevent reconciliation
 	if r.shouldManageType(schedule, "HelmRelease") {
-		if err := r.sleepFluxResources(ctx, schedule, fluxHelmReleaseGVK, "HelmRelease"); err != nil {
+		if err := r.sleepSuspendResources(ctx, schedule, fluxHelmReleaseGVK, "HelmRelease"); err != nil {
 			return err
 		}
 	}
-
-	// Handle FluxCD Kustomizations (suspend BEFORE scaling workloads to prevent reconciliation)
 	if r.shouldManageType(schedule, "Kustomization") {
-		if err := r.sleepFluxResources(ctx, schedule, fluxKustomizationGVK, "Kustomization"); err != nil {
+		if err := r.sleepSuspendResources(ctx, schedule, fluxKustomizationGVK, "Kustomization"); err != nil {
+			return err
+		}
+	}
+	if r.shouldManageType(schedule, "MariaDB") {
+		if err := r.sleepSuspendResources(ctx, schedule, mariadbGVK, "MariaDB"); err != nil {
+			return err
+		}
+	}
+	if r.shouldManageType(schedule, "MaxScale") {
+		if err := r.sleepSuspendResources(ctx, schedule, mariadbMaxScaleGVK, "MaxScale"); err != nil {
 			return err
 		}
 	}
@@ -361,10 +382,10 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 func (r *SleepScheduleReconciler) wakeWorkloads(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule) error {
 	logger := log.FromContext(ctx)
 
-	// First pass: wake all workloads except FluxCD
+	// First pass: wake all workloads except suspend-based operators (FluxCD, MariaDB)
 	for _, managed := range schedule.Status.ManagedWorkloads {
 		switch managed.Kind {
-		case "HelmRelease", "Kustomization":
+		case "HelmRelease", "Kustomization", "MariaDB", "MaxScale":
 			continue // handle in second pass after workloads are restored
 
 		case "Deployment":
@@ -446,15 +467,23 @@ func (r *SleepScheduleReconciler) wakeWorkloads(ctx context.Context, schedule *s
 		}
 	}
 
-	// Second pass: resume FluxCD reconciliation AFTER workloads are restored
+	// Second pass: resume suspend-based operators AFTER workloads are restored
 	for _, managed := range schedule.Status.ManagedWorkloads {
 		switch managed.Kind {
 		case "HelmRelease":
-			if err := r.wakeFluxResource(ctx, schedule, managed, fluxHelmReleaseGVK); err != nil {
+			if err := r.wakeSuspendResource(ctx, schedule, managed, fluxHelmReleaseGVK); err != nil {
 				return err
 			}
 		case "Kustomization":
-			if err := r.wakeFluxResource(ctx, schedule, managed, fluxKustomizationGVK); err != nil {
+			if err := r.wakeSuspendResource(ctx, schedule, managed, fluxKustomizationGVK); err != nil {
+				return err
+			}
+		case "MariaDB":
+			if err := r.wakeSuspendResource(ctx, schedule, managed, mariadbGVK); err != nil {
+				return err
+			}
+		case "MaxScale":
+			if err := r.wakeSuspendResource(ctx, schedule, managed, mariadbMaxScaleGVK); err != nil {
 				return err
 			}
 		}
@@ -479,8 +508,8 @@ func (r *SleepScheduleReconciler) shouldManageType(schedule *slumlordv1alpha1.Sl
 	return false
 }
 
-// sleepFluxResources suspends FluxCD resources (HelmRelease or Kustomization)
-func (r *SleepScheduleReconciler) sleepFluxResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, gvk schema.GroupVersionKind, kind string) error {
+// sleepSuspendResources suspends CRDs that use spec.suspend (FluxCD, MariaDB operator)
+func (r *SleepScheduleReconciler) sleepSuspendResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, gvk schema.GroupVersionKind, kind string) error {
 	logger := log.FromContext(ctx)
 
 	resourceList := &unstructured.UnstructuredList{}
@@ -492,7 +521,7 @@ func (r *SleepScheduleReconciler) sleepFluxResources(ctx context.Context, schedu
 
 	if err := r.List(ctx, resourceList, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
 		if apimeta.IsNoMatchError(err) {
-			logger.Info("FluxCD CRD not installed, skipping", "kind", kind)
+			logger.Info("CRD not installed, skipping", "kind", kind)
 			return nil
 		}
 		return err
@@ -524,21 +553,21 @@ func (r *SleepScheduleReconciler) sleepFluxResources(ctx context.Context, schedu
 			if err := r.Update(ctx, resource); err != nil {
 				return err
 			}
-			logger.Info("Suspended FluxCD resource", "kind", kind, "name", resource.GetName())
+			logger.Info("Suspended resource", "kind", kind, "name", resource.GetName())
 		}
 	}
 
 	return nil
 }
 
-// wakeFluxResource resumes a single FluxCD resource
-func (r *SleepScheduleReconciler) wakeFluxResource(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, managed slumlordv1alpha1.ManagedWorkload, gvk schema.GroupVersionKind) error {
+// wakeSuspendResource resumes a single suspend-based resource
+func (r *SleepScheduleReconciler) wakeSuspendResource(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, managed slumlordv1alpha1.ManagedWorkload, gvk schema.GroupVersionKind) error {
 	logger := log.FromContext(ctx)
 
 	resource := &unstructured.Unstructured{}
 	resource.SetGroupVersionKind(gvk)
 	if err := r.Get(ctx, client.ObjectKey{Namespace: schedule.Namespace, Name: managed.Name}, resource); err != nil {
-		logger.Error(err, "Failed to get FluxCD resource", "kind", managed.Kind, "name", managed.Name)
+		logger.Error(err, "Failed to get resource", "kind", managed.Kind, "name", managed.Name)
 		return nil
 	}
 
@@ -555,7 +584,7 @@ func (r *SleepScheduleReconciler) wakeFluxResource(ctx context.Context, schedule
 	if err := r.Update(ctx, resource); err != nil {
 		return err
 	}
-	logger.Info("Resumed FluxCD resource", "kind", managed.Kind, "name", resource.GetName())
+	logger.Info("Resumed resource", "kind", managed.Kind, "name", resource.GetName())
 	return nil
 }
 
