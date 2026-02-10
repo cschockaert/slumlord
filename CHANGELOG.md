@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-02-10
+
 ### Added
 
 - Support for MariaDB Operator CRDs: `MariaDB` and `MaxScale` in SlumlordSleepSchedule
@@ -142,7 +144,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.5.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.6.0...HEAD
+[2.6.0]: https://github.com/cschockaert/slumlord/compare/2.5.0...2.6.0
 [2.5.0]: https://github.com/cschockaert/slumlord/compare/2.4.0...2.5.0
 [2.4.0]: https://github.com/cschockaert/slumlord/compare/2.3.0...2.4.0
 [2.3.0]: https://github.com/cschockaert/slumlord/compare/2.2.0...2.3.0
