@@ -308,6 +308,7 @@ func newCustomRESTMapper() meta.RESTMapper {
 		{Group: "helm.toolkit.fluxcd.io", Version: "v2"},
 		{Group: "kustomize.toolkit.fluxcd.io", Version: "v1"},
 		{Group: "monitoring.coreos.com", Version: "v1"},
+		{Group: "k8s.mariadb.com", Version: "v1alpha1"},
 	})
 	mapper.Add(schema.GroupVersionKind{Group: "postgresql.cnpg.io", Version: "v1", Kind: "Cluster"}, meta.RESTScopeNamespace)
 	mapper.Add(schema.GroupVersionKind{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"}, meta.RESTScopeNamespace)
@@ -315,6 +316,8 @@ func newCustomRESTMapper() meta.RESTMapper {
 	mapper.Add(schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ThanosRuler"}, meta.RESTScopeNamespace)
 	mapper.Add(schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "Alertmanager"}, meta.RESTScopeNamespace)
 	mapper.Add(schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "Prometheus"}, meta.RESTScopeNamespace)
+	mapper.Add(schema.GroupVersionKind{Group: "k8s.mariadb.com", Version: "v1alpha1", Kind: "MariaDB"}, meta.RESTScopeNamespace)
+	mapper.Add(schema.GroupVersionKind{Group: "k8s.mariadb.com", Version: "v1alpha1", Kind: "MaxScale"}, meta.RESTScopeNamespace)
 	return mapper
 }
 
@@ -1988,6 +1991,280 @@ func TestReconcile_WakesPrometheus(t *testing.T) {
 	spec := updated.Object["spec"].(map[string]interface{})
 	if replicas, ok := spec["replicas"].(int64); !ok || replicas != 2 {
 		t.Errorf("Expected spec.replicas = 2, got %v", spec["replicas"])
+	}
+}
+
+func TestReconcile_SuspendsMariaDB(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	mdb := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "k8s.mariadb.com/v1alpha1",
+			"kind":       "MariaDB",
+			"metadata": map[string]interface{}{
+				"name":      "test-mariadb",
+				"namespace": namespace,
+				"labels":    map[string]interface{}{"app": "test"},
+			},
+			"spec": map[string]interface{}{
+				"replicas": int64(3),
+				"suspend":  false,
+			},
+		},
+	}
+
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-schedule", Namespace: namespace},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"MariaDB"},
+			},
+			Schedule: slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(newCustomRESTMapper()).
+		WithObjects(mdb, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	updated := &unstructured.Unstructured{}
+	updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "k8s.mariadb.com", Version: "v1alpha1", Kind: "MariaDB"})
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-mariadb", Namespace: namespace}, updated); err != nil {
+		t.Fatalf("Failed to get MariaDB: %v", err)
+	}
+	spec := updated.Object["spec"].(map[string]interface{})
+	if suspend, ok := spec["suspend"].(bool); !ok || !suspend {
+		t.Errorf("Expected spec.suspend = true, got %v", spec["suspend"])
+	}
+
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if !updatedSchedule.Status.Sleeping {
+		t.Error("Expected status.sleeping = true")
+	}
+	if len(updatedSchedule.Status.ManagedWorkloads) != 1 {
+		t.Errorf("Expected 1 managed workload, got %d", len(updatedSchedule.Status.ManagedWorkloads))
+	}
+	if updatedSchedule.Status.ManagedWorkloads[0].Kind != "MariaDB" {
+		t.Errorf("Expected kind = MariaDB, got %s", updatedSchedule.Status.ManagedWorkloads[0].Kind)
+	}
+}
+
+func TestReconcile_WakesMariaDB(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	mdb := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "k8s.mariadb.com/v1alpha1",
+			"kind":       "MariaDB",
+			"metadata": map[string]interface{}{
+				"name":      "test-mariadb",
+				"namespace": namespace,
+				"labels":    map[string]interface{}{"app": "test"},
+			},
+			"spec": map[string]interface{}{
+				"replicas": int64(3),
+				"suspend":  true,
+			},
+		},
+	}
+
+	originalSuspend := false
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-schedule", Namespace: namespace},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"MariaDB"},
+			},
+			Schedule: neverSleepingSchedule(),
+		},
+		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
+			Sleeping: true,
+			ManagedWorkloads: []slumlordv1alpha1.ManagedWorkload{
+				{Kind: "MariaDB", Name: "test-mariadb", OriginalSuspend: &originalSuspend},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(newCustomRESTMapper()).
+		WithObjects(mdb, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+	if err := fakeClient.Status().Update(ctx, schedule); err != nil {
+		t.Fatalf("Failed to set initial status: %v", err)
+	}
+
+	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	updated := &unstructured.Unstructured{}
+	updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "k8s.mariadb.com", Version: "v1alpha1", Kind: "MariaDB"})
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-mariadb", Namespace: namespace}, updated); err != nil {
+		t.Fatalf("Failed to get MariaDB: %v", err)
+	}
+	spec := updated.Object["spec"].(map[string]interface{})
+	if suspend, ok := spec["suspend"].(bool); ok && suspend {
+		t.Error("Expected MariaDB to be unsuspended")
+	}
+}
+
+func TestReconcile_SuspendsMaxScale(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	ms := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "k8s.mariadb.com/v1alpha1",
+			"kind":       "MaxScale",
+			"metadata": map[string]interface{}{
+				"name":      "test-maxscale",
+				"namespace": namespace,
+				"labels":    map[string]interface{}{"app": "test"},
+			},
+			"spec": map[string]interface{}{
+				"replicas": int64(2),
+				"suspend":  false,
+			},
+		},
+	}
+
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-schedule", Namespace: namespace},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"MaxScale"},
+			},
+			Schedule: slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(newCustomRESTMapper()).
+		WithObjects(ms, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	updated := &unstructured.Unstructured{}
+	updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "k8s.mariadb.com", Version: "v1alpha1", Kind: "MaxScale"})
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-maxscale", Namespace: namespace}, updated); err != nil {
+		t.Fatalf("Failed to get MaxScale: %v", err)
+	}
+	spec := updated.Object["spec"].(map[string]interface{})
+	if suspend, ok := spec["suspend"].(bool); !ok || !suspend {
+		t.Errorf("Expected spec.suspend = true, got %v", spec["suspend"])
+	}
+
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if updatedSchedule.Status.ManagedWorkloads[0].Kind != "MaxScale" {
+		t.Errorf("Expected kind = MaxScale, got %s", updatedSchedule.Status.ManagedWorkloads[0].Kind)
+	}
+}
+
+func TestReconcile_WakesMaxScale(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	ms := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "k8s.mariadb.com/v1alpha1",
+			"kind":       "MaxScale",
+			"metadata": map[string]interface{}{
+				"name":      "test-maxscale",
+				"namespace": namespace,
+				"labels":    map[string]interface{}{"app": "test"},
+			},
+			"spec": map[string]interface{}{
+				"replicas": int64(2),
+				"suspend":  true,
+			},
+		},
+	}
+
+	originalSuspend := false
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-schedule", Namespace: namespace},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"MaxScale"},
+			},
+			Schedule: neverSleepingSchedule(),
+		},
+		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
+			Sleeping: true,
+			ManagedWorkloads: []slumlordv1alpha1.ManagedWorkload{
+				{Kind: "MaxScale", Name: "test-maxscale", OriginalSuspend: &originalSuspend},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(newCustomRESTMapper()).
+		WithObjects(ms, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+	if err := fakeClient.Status().Update(ctx, schedule); err != nil {
+		t.Fatalf("Failed to set initial status: %v", err)
+	}
+
+	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	updated := &unstructured.Unstructured{}
+	updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "k8s.mariadb.com", Version: "v1alpha1", Kind: "MaxScale"})
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-maxscale", Namespace: namespace}, updated); err != nil {
+		t.Fatalf("Failed to get MaxScale: %v", err)
+	}
+	spec := updated.Object["spec"].(map[string]interface{})
+	if suspend, ok := spec["suspend"].(bool); ok && suspend {
+		t.Error("Expected MaxScale to be unsuspended")
 	}
 }
 

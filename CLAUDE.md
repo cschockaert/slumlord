@@ -52,7 +52,7 @@ make uninstall
 ### CRD Structure (api/v1alpha1/)
 
 - **SlumlordSleepSchedule**: Namespace-scoped resource that defines sleep schedules for workloads
-  - `spec.selector`: Label selector, name patterns (wildcards), and workload types (Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus)
+  - `spec.selector`: Label selector, name patterns (wildcards), and workload types (Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus, MariaDB, MaxScale)
   - `spec.schedule`: Time window with start/end times, timezone, and day-of-week filter
   - `status.managedWorkloads`: Tracks original replica counts/suspend states for restoration
 
@@ -69,7 +69,7 @@ make uninstall
 
 - **SleepScheduleReconciler**: Main reconciliation loop
   - Runs every minute to check if current time falls within sleep window
-  - On sleep: scales Deployments/StatefulSets to 0, scales Prometheus Operator CRDs (ThanosRuler, Alertmanager, Prometheus) to 0, suspends CronJobs, hibernates CNPG clusters, suspends FluxCD resources
+  - On sleep: scales Deployments/StatefulSets to 0, scales Prometheus Operator CRDs (ThanosRuler, Alertmanager, Prometheus) to 0, suspends CronJobs, hibernates CNPG clusters, suspends FluxCD resources, suspends MariaDB Operator CRDs (MariaDB, MaxScale)
   - On wake: restores original replica counts and suspend states from status
   - Finalizer ensures workloads are restored on schedule deletion
 

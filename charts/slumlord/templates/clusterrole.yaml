@@ -111,6 +111,18 @@ rules:
       - patch
       - update
       - watch
+  # MariaDB Operator CRDs (MariaDB, MaxScale)
+  - apiGroups:
+      - k8s.mariadb.com
+    resources:
+      - mariadbs
+      - maxscales
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
   # SlumlordIdleDetector read-only (dashboard needs these even when controller is disabled)
   - apiGroups:
       - slumlord.io

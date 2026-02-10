@@ -7,6 +7,7 @@ Kubernetes operator for cost optimization -- automatically scales down workloads
 **Sleep Schedules** -- scale down workloads on a time-based schedule:
 - Scales Deployments and StatefulSets to zero replicas
 - Scales Prometheus Operator CRDs (ThanosRuler, Alertmanager, Prometheus) to zero replicas
+- Suspends MariaDB Operator CRDs (MariaDB, MaxScale) via `spec.suspend`
 - Suspends CronJobs, FluxCD HelmReleases and Kustomizations
 - Hibernates CNPG PostgreSQL clusters
 - Timezone-aware scheduling with day-of-week filters
@@ -152,6 +153,29 @@ spec:
 
 > **Note**: The Prometheus Operator itself should NOT be scaled down -- only its managed CRs. The operator must be running to reconcile the CRs back up on wake.
 
+### MariaDB Operator suspend
+
+```yaml
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordSleepSchedule
+metadata:
+  name: mariadb-suspend
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - MariaDB
+      - MaxScale
+  schedule:
+    start: "21:55"
+    end: "06:05"
+    timezone: Europe/Paris
+    days: [1, 2, 3, 4, 5]
+```
+
+> **Important**: Like FluxCD, the MariaDB Operator's `spec.suspend` pauses its reconciliation loop. Suspend the operator before scaling down underlying workloads, and resume it after restoring them. This prevents the operator from recreating resources during the sleep window.
+
 ### Idle detection -- alert mode
 
 ```yaml
@@ -202,7 +226,7 @@ spec:
 |-------|------|----------|-------------|
 | `spec.selector.matchLabels` | `map[string]string` | No | Label selector for target workloads |
 | `spec.selector.matchNames` | `[]string` | No | Name patterns (supports wildcards) |
-| `spec.selector.types` | `[]string` | No | Workload types to manage. Valid: `Deployment`, `StatefulSet`, `CronJob`, `Cluster`, `HelmRelease`, `Kustomization`, `ThanosRuler`, `Alertmanager`, `Prometheus`. Default: all types |
+| `spec.selector.types` | `[]string` | No | Workload types to manage. Valid: `Deployment`, `StatefulSet`, `CronJob`, `Cluster`, `HelmRelease`, `Kustomization`, `ThanosRuler`, `Alertmanager`, `Prometheus`, `MariaDB`, `MaxScale`. Default: all types |
 | `spec.schedule.start` | `string` | Yes | Sleep start time in `HH:MM` format |
 | `spec.schedule.end` | `string` | Yes | Wake time in `HH:MM` format |
 | `spec.schedule.timezone` | `string` | No | IANA timezone (e.g., `Europe/Paris`). Default: `UTC` |
@@ -241,7 +265,7 @@ default     idle-alert    alert    1h              2026-02-08T12:00:00Z  1d
 The operator runs a reconciliation loop every minute for each SlumlordSleepSchedule resource:
 
 1. Checks if the current time (in the configured timezone) falls within the sleep window
-2. On **sleep**: scales Deployments/StatefulSets to 0, scales Prometheus Operator CRDs (ThanosRuler, Alertmanager, Prometheus) to 0, suspends CronJobs, hibernates CNPG clusters, and suspends FluxCD HelmReleases/Kustomizations
+2. On **sleep**: scales Deployments/StatefulSets to 0, scales Prometheus Operator CRDs (ThanosRuler, Alertmanager, Prometheus) to 0, suspends CronJobs, hibernates CNPG clusters, suspends FluxCD HelmReleases/Kustomizations, and suspends MariaDB Operator CRDs (MariaDB, MaxScale)
 3. On **wake**: restores all workloads to their original state
 4. Original state (replica counts, suspend flags, hibernation annotations) is stored in `status.managedWorkloads` to survive operator restarts
 
@@ -268,6 +292,8 @@ graph LR
     B --> K[ThanosRulers]
     B --> L[Alertmanagers]
     B --> M[Prometheuses]
+    B --> N[MariaDBs]
+    B --> O[MaxScales]
 
     I[SlumlordIdleDetector] --> J[Idle Controller]
     J --> C

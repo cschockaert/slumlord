@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Support for MariaDB Operator CRDs: `MariaDB` and `MaxScale` in SlumlordSleepSchedule
+- Suspend/resume reconciliation via `spec.suspend` (same pattern as FluxCD)
+- RBAC permissions for `k8s.mariadb.com` resources (mariadbs, maxscales)
+- Graceful handling when MariaDB Operator CRDs are not installed (skip with log, no crash)
+
+### Changed
+
+- Renamed `sleepFluxResources`/`wakeFluxResource` to generic `sleepSuspendResources`/`wakeSuspendResource`
+- Fixed wake tests to be time-independent (no more failures during 23:00-23:59 UTC)
+
 ## [2.5.0] - 2026-02-10
 
 ### Added
