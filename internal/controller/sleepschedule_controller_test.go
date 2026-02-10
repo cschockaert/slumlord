@@ -278,6 +278,19 @@ func TestShouldManageType(t *testing.T) {
 	}
 }
 
+// neverSleepingSchedule returns a SleepWindow guaranteed to never be active,
+// regardless of when the test runs. It picks a day 3 days from now (UTC) so
+// it's never today or yesterday (overnight carry-over).
+func neverSleepingSchedule() slumlordv1alpha1.SleepWindow {
+	neverDay := (int(time.Now().UTC().Weekday()) + 3) % 7
+	return slumlordv1alpha1.SleepWindow{
+		Start:    "12:00",
+		End:      "12:01",
+		Timezone: "UTC",
+		Days:     []int{neverDay},
+	}
+}
+
 func newTestScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
@@ -839,11 +852,7 @@ func TestReconcile_WakesDeployment(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Deployment"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
-				Start:    "23:00",
-				End:      "23:59",
-				Timezone: "UTC",
-			},
+			Schedule: neverSleepingSchedule(),
 		},
 		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
 			Sleeping: true,
@@ -993,9 +1002,9 @@ func TestReconcile_FullLifecycle(t *testing.T) {
 		t.Error("After sleep: expected status.sleeping = true")
 	}
 
-	// Change schedule to a window that is NOT sleeping (narrow late-night window)
-	updatedSchedule.Spec.Schedule.Start = "23:00"
-	updatedSchedule.Spec.Schedule.End = "23:59"
+	// Change schedule to a window that is NOT sleeping
+	wakeSchedule := neverSleepingSchedule()
+	updatedSchedule.Spec.Schedule = wakeSchedule
 	if err := fakeClient.Update(ctx, &updatedSchedule); err != nil {
 		t.Fatalf("Failed to update schedule spec: %v", err)
 	}
@@ -1254,7 +1263,7 @@ func TestReconcile_WakesStatefulSet(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"StatefulSet"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "23:00", End: "23:59", Timezone: "UTC"},
+			Schedule: neverSleepingSchedule(),
 		},
 		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
 			Sleeping: true,
@@ -1326,7 +1335,7 @@ func TestReconcile_WakesCronJob(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"CronJob"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "23:00", End: "23:59", Timezone: "UTC"},
+			Schedule: neverSleepingSchedule(),
 		},
 		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
 			Sleeping: true,
@@ -1391,7 +1400,7 @@ func TestReconcile_WakesCNPGCluster(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Cluster"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "23:00", End: "23:59", Timezone: "UTC"},
+			Schedule: neverSleepingSchedule(),
 		},
 		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
 			Sleeping: true,
@@ -1462,7 +1471,7 @@ func TestReconcile_WakesFluxHelmRelease(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"HelmRelease"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "23:00", End: "23:59", Timezone: "UTC"},
+			Schedule: neverSleepingSchedule(),
 		},
 		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
 			Sleeping: true,
@@ -1532,7 +1541,7 @@ func TestReconcile_WakesFluxKustomization(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Kustomization"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "23:00", End: "23:59", Timezone: "UTC"},
+			Schedule: neverSleepingSchedule(),
 		},
 		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
 			Sleeping: true,
@@ -1809,7 +1818,7 @@ func TestReconcile_WakesThanosRuler(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"ThanosRuler"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "23:00", End: "23:59", Timezone: "UTC"},
+			Schedule: neverSleepingSchedule(),
 		},
 		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
 			Sleeping: true,
@@ -1876,7 +1885,7 @@ func TestReconcile_WakesAlertmanager(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Alertmanager"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "23:00", End: "23:59", Timezone: "UTC"},
+			Schedule: neverSleepingSchedule(),
 		},
 		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
 			Sleeping: true,
@@ -1943,7 +1952,7 @@ func TestReconcile_WakesPrometheus(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Prometheus"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "23:00", End: "23:59", Timezone: "UTC"},
+			Schedule: neverSleepingSchedule(),
 		},
 		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
 			Sleeping: true,
