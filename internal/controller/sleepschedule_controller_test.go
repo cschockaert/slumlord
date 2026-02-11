@@ -16,7 +16,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	slumlordv1alpha1 "github.com/cschockaert/slumlord/api/v1alpha1"
@@ -217,7 +219,7 @@ func TestShouldBeSleepingAt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := &SleepScheduleReconciler{}
+			r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
 			schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
 				Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
 					Schedule: tt.schedule,
@@ -261,7 +263,7 @@ func TestShouldManageType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := &SleepScheduleReconciler{}
+			r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
 			schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
 				Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
 					Selector: slumlordv1alpha1.WorkloadSelector{
@@ -296,6 +298,14 @@ func newTestScheme() *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(slumlordv1alpha1.AddToScheme(s))
 	return s
+}
+
+func newSleepReconciler(scheme *runtime.Scheme, fakeClient client.Client) *SleepScheduleReconciler {
+	return &SleepScheduleReconciler{
+		Client:   fakeClient,
+		Scheme:   scheme,
+		Recorder: events.NewFakeRecorder(100),
+	}
 }
 
 func newCustomRESTMapper() meta.RESTMapper {
@@ -377,10 +387,7 @@ func TestReconcile_ScalesDownDeployment(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{
-		Client: fakeClient,
-		Scheme: scheme,
-	}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 
 	// Reconcile
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -474,10 +481,7 @@ func TestReconcile_SuspendsCronJob(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{
-		Client: fakeClient,
-		Scheme: scheme,
-	}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 
 	// Reconcile
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -549,10 +553,7 @@ func TestReconcile_HibernatesCNPGCluster(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{
-		Client: fakeClient,
-		Scheme: scheme,
-	}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 
 	// Reconcile
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -653,10 +654,7 @@ func TestReconcile_SuspendsFluxHelmRelease(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{
-		Client: fakeClient,
-		Scheme: scheme,
-	}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 
 	// Reconcile
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -760,10 +758,7 @@ func TestReconcile_SuspendsFluxKustomization(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{
-		Client: fakeClient,
-		Scheme: scheme,
-	}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 
 	// Reconcile
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -880,10 +875,7 @@ func TestReconcile_WakesDeployment(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{
-		Client: fakeClient,
-		Scheme: scheme,
-	}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 
 	// Reconcile
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -905,7 +897,7 @@ func TestReconcile_WakesDeployment(t *testing.T) {
 		t.Errorf("Expected replicas = 3, got %d", *updatedDeploy.Spec.Replicas)
 	}
 
-	// Verify status.Sleeping = false and managedWorkloads is cleared
+	// Verify status.Sleeping = false and managedWorkloads is preserved for verification
 	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
 	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
 		t.Fatalf("Failed to get schedule: %v", err)
@@ -913,8 +905,9 @@ func TestReconcile_WakesDeployment(t *testing.T) {
 	if updatedSchedule.Status.Sleeping {
 		t.Error("Expected status.sleeping = false")
 	}
-	if len(updatedSchedule.Status.ManagedWorkloads) != 0 {
-		t.Errorf("Expected 0 managed workloads, got %d", len(updatedSchedule.Status.ManagedWorkloads))
+	// ManagedWorkloads are now preserved after wake for the verification window
+	if len(updatedSchedule.Status.ManagedWorkloads) != 1 {
+		t.Errorf("Expected 1 managed workload (preserved for verify), got %d", len(updatedSchedule.Status.ManagedWorkloads))
 	}
 }
 
@@ -974,10 +967,7 @@ func TestReconcile_FullLifecycle(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{
-		Client: fakeClient,
-		Scheme: scheme,
-	}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 
 	nn := types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}
 
@@ -1107,10 +1097,7 @@ func TestReconcile_IdempotentSleep(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{
-		Client: fakeClient,
-		Scheme: scheme,
-	}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 
 	// Reconcile
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -1202,7 +1189,7 @@ func TestReconcile_ScalesDownStatefulSet(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
@@ -1285,7 +1272,7 @@ func TestReconcile_WakesStatefulSet(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -1357,7 +1344,7 @@ func TestReconcile_WakesCronJob(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -1423,7 +1410,7 @@ func TestReconcile_WakesCNPGCluster(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -1494,7 +1481,7 @@ func TestReconcile_WakesFluxHelmRelease(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -1564,7 +1551,7 @@ func TestReconcile_WakesFluxKustomization(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -1621,7 +1608,7 @@ func TestReconcile_ScalesDownThanosRuler(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -1695,7 +1682,7 @@ func TestReconcile_ScalesDownAlertmanager(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -1763,7 +1750,7 @@ func TestReconcile_ScalesDownPrometheus(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -1841,7 +1828,7 @@ func TestReconcile_WakesThanosRuler(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -1908,7 +1895,7 @@ func TestReconcile_WakesAlertmanager(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -1975,7 +1962,7 @@ func TestReconcile_WakesPrometheus(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -2033,7 +2020,7 @@ func TestReconcile_SuspendsMariaDB(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -2115,7 +2102,7 @@ func TestReconcile_WakesMariaDB(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -2173,7 +2160,7 @@ func TestReconcile_SuspendsMaxScale(t *testing.T) {
 		WithStatusSubresource(schedule).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -2249,7 +2236,7 @@ func TestReconcile_WakesMaxScale(t *testing.T) {
 		t.Fatalf("Failed to set initial status: %v", err)
 	}
 
-	reconciler := &SleepScheduleReconciler{Client: fakeClient, Scheme: scheme}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 	})
@@ -2276,10 +2263,7 @@ func TestReconcile_DeletedSchedule(t *testing.T) {
 		WithScheme(scheme).
 		Build()
 
-	reconciler := &SleepScheduleReconciler{
-		Client: fakeClient,
-		Scheme: scheme,
-	}
+	reconciler := newSleepReconciler(scheme, fakeClient)
 
 	// Reconcile with a NamespacedName that doesn't exist
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -2290,5 +2274,184 @@ func TestReconcile_DeletedSchedule(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Expected no error for deleted/nonexistent schedule, got: %v", err)
+	}
+}
+
+func TestShouldVerifyWorkloads(t *testing.T) {
+	r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
+	now := time.Now()
+
+	// No transition time -> false
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{}
+	if r.shouldVerifyWorkloads(schedule, now) {
+		t.Error("Expected false with nil LastTransitionTime")
+	}
+
+	// Recent transition but no managed workloads -> false
+	recent := metav1.NewTime(now.Add(-5 * time.Minute))
+	schedule.Status.LastTransitionTime = &recent
+	if r.shouldVerifyWorkloads(schedule, now) {
+		t.Error("Expected false with empty ManagedWorkloads")
+	}
+
+	// Recent transition with managed workloads -> true
+	originalReplicas := int32(3)
+	schedule.Status.ManagedWorkloads = []slumlordv1alpha1.ManagedWorkload{
+		{Kind: "Deployment", Name: "test", OriginalReplicas: &originalReplicas},
+	}
+	if !r.shouldVerifyWorkloads(schedule, now) {
+		t.Error("Expected true within verify window with ManagedWorkloads")
+	}
+
+	// Old transition -> false
+	old := metav1.NewTime(now.Add(-15 * time.Minute))
+	schedule.Status.LastTransitionTime = &old
+	if r.shouldVerifyWorkloads(schedule, now) {
+		t.Error("Expected false outside verify window")
+	}
+}
+
+func TestTimeUntilNextTransition(t *testing.T) {
+	r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Schedule: slumlordv1alpha1.SleepWindow{
+				Start:    "22:00",
+				End:      "06:00",
+				Timezone: "UTC",
+			},
+		},
+	}
+
+	// At 21:50, should be ~11 min until sleep starts (22:01 is first minute after 22:00)
+	now := time.Date(2024, 1, 15, 21, 50, 0, 0, time.UTC) // Monday 21:50, not sleeping
+	d := r.timeUntilNextTransition(schedule, now)
+	if d < 10*time.Minute || d > 12*time.Minute {
+		t.Errorf("Expected ~11 minutes until transition, got %v", d)
+	}
+
+	// At 12:00 (midday, not sleeping), many hours until 22:00
+	now = time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	d = r.timeUntilNextTransition(schedule, now)
+	if d < 9*time.Hour || d > 11*time.Hour {
+		t.Errorf("Expected ~10 hours until transition, got %v", d)
+	}
+
+	// At 23:00 (sleeping), should be ~7 hours until 06:00 wake
+	now = time.Date(2024, 1, 15, 23, 0, 0, 0, time.UTC)
+	d = r.timeUntilNextTransition(schedule, now)
+	if d < 6*time.Hour || d > 8*time.Hour {
+		t.Errorf("Expected ~7 hours until wake transition, got %v", d)
+	}
+}
+
+func TestComputeRequeueInterval(t *testing.T) {
+	r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Schedule: slumlordv1alpha1.SleepWindow{
+				Start:    "22:00",
+				End:      "06:00",
+				Timezone: "UTC",
+			},
+		},
+	}
+
+	// Far from transition -> idle interval (5 min)
+	now := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	interval := r.computeRequeueInterval(schedule, now)
+	if interval != idleRequeueInterval {
+		t.Errorf("Expected %v idle interval, got %v", idleRequeueInterval, interval)
+	}
+
+	// Near transition (within 10 min) -> approaching interval (30s)
+	now = time.Date(2024, 1, 15, 21, 52, 0, 0, time.UTC)
+	interval = r.computeRequeueInterval(schedule, now)
+	if interval != approachingRequeueInterval {
+		t.Errorf("Expected %v approaching interval, got %v", approachingRequeueInterval, interval)
+	}
+
+	// During verify window -> verify interval (30s)
+	recent := metav1.NewTime(time.Now().Add(-2 * time.Minute))
+	originalReplicas := int32(3)
+	schedule.Status.LastTransitionTime = &recent
+	schedule.Status.ManagedWorkloads = []slumlordv1alpha1.ManagedWorkload{
+		{Kind: "Deployment", Name: "test", OriginalReplicas: &originalReplicas},
+	}
+	interval = r.computeRequeueInterval(schedule, time.Now())
+	if interval != verifyRequeueInterval {
+		t.Errorf("Expected %v verify interval, got %v", verifyRequeueInterval, interval)
+	}
+}
+
+func TestReconcile_VerifiesWorkloadState(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// Deployment at 0 replicas (desynced - should have been woken)
+	zero := int32(0)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-deploy",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &zero,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "test", Image: "nginx"}}},
+			},
+		},
+	}
+
+	// Schedule in awake state with ManagedWorkloads still populated (within verify window)
+	originalReplicas := int32(3)
+	recentTransition := metav1.NewTime(time.Now().Add(-2 * time.Minute))
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-schedule", Namespace: namespace},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Schedule: neverSleepingSchedule(),
+		},
+		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
+			Sleeping:           false,
+			LastTransitionTime: &recentTransition,
+			ManagedWorkloads: []slumlordv1alpha1.ManagedWorkload{
+				{Kind: "Deployment", Name: "test-deploy", OriginalReplicas: &originalReplicas},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deploy, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+	if err := fakeClient.Status().Update(ctx, schedule); err != nil {
+		t.Fatalf("Failed to set initial status: %v", err)
+	}
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	// Verify deployment was corrected to 3 replicas
+	var updatedDeploy appsv1.Deployment
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}, &updatedDeploy); err != nil {
+		t.Fatalf("Failed to get deployment: %v", err)
+	}
+	if *updatedDeploy.Spec.Replicas != 3 {
+		t.Errorf("Expected replicas = 3 (corrected), got %d", *updatedDeploy.Spec.Replicas)
 	}
 }

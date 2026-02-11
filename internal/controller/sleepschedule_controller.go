@@ -6,16 +6,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	slumlordv1alpha1 "github.com/cschockaert/slumlord/api/v1alpha1"
 )
@@ -23,7 +28,8 @@ import (
 // SleepScheduleReconciler reconciles a SlumlordSleepSchedule object
 type SleepScheduleReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder events.EventRecorder
 }
 
 var cnpgClusterGVK = schema.GroupVersionKind{
@@ -76,6 +82,46 @@ var mariadbMaxScaleGVK = schema.GroupVersionKind{
 	Kind:    "MaxScale",
 }
 
+// Prometheus metrics
+var (
+	reconcileActionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "slumlord_reconcile_actions_total",
+			Help: "Total number of reconcile actions performed by the sleep schedule controller",
+		},
+		[]string{"action"},
+	)
+
+	wakeDurationSeconds = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "slumlord_wake_duration_seconds",
+			Help:    "Duration of wake operations in seconds",
+			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300},
+		},
+	)
+
+	managedWorkloadsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "slumlord_managed_workloads",
+			Help: "Number of workloads managed per sleep schedule",
+		},
+		[]string{"namespace", "schedule"},
+	)
+)
+
+func init() {
+	crmetrics.Registry.MustRegister(reconcileActionsTotal, wakeDurationSeconds, managedWorkloadsGauge)
+}
+
+// Requeue and verification intervals
+const (
+	idleRequeueInterval        = 5 * time.Minute
+	approachingRequeueInterval = 30 * time.Second
+	approachingWindow          = 10 * time.Minute
+	verifyWindow               = 10 * time.Minute
+	verifyRequeueInterval      = 30 * time.Second
+)
+
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordsleepschedules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordsleepschedules/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
@@ -86,6 +132,7 @@ var mariadbMaxScaleGVK = schema.GroupVersionKind{
 // +kubebuilder:rbac:groups=kustomize.toolkit.fluxcd.io,resources=kustomizations,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=thanosrulers;alertmanagers;prometheuses,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=k8s.mariadb.com,resources=mariadbs;maxscales,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile handles the reconciliation loop for SlumlordSleepSchedule
 func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -94,52 +141,100 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Fetch the SlumlordSleepSchedule
 	var schedule slumlordv1alpha1.SlumlordSleepSchedule
 	if err := r.Get(ctx, req.NamespacedName, &schedule); err != nil {
+		// Clean up gauge for deleted schedules to prevent cardinality leak
+		managedWorkloadsGauge.DeleteLabelValues(req.Namespace, req.Name)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	// Determine if we should be sleeping
-	shouldSleep := r.shouldBeSleeping(&schedule)
-	logger.Info("Reconciling sleep schedule", "shouldSleep", shouldSleep, "currentlySleeping", schedule.Status.Sleeping)
+	now := time.Now()
+	shouldSleep := r.shouldBeSleepingAt(&schedule, now)
 
 	// Compute human-readable days display
 	daysDisplay := daysToDisplay(schedule.Spec.Schedule.Days)
 	statusChanged := shouldSleep != schedule.Status.Sleeping
 	daysChanged := schedule.Status.DaysDisplay != daysDisplay
 
+	// Only log at INFO level when something changes; use V(1) for no-ops
+	if statusChanged {
+		logger.Info("Reconciling sleep schedule", "shouldSleep", shouldSleep, "currentlySleeping", schedule.Status.Sleeping)
+	} else {
+		logger.V(1).Info("Reconciling sleep schedule", "shouldSleep", shouldSleep, "currentlySleeping", schedule.Status.Sleeping)
+	}
+
 	// If state needs to change, update workloads
 	if statusChanged {
 		if shouldSleep {
+			r.Recorder.Eventf(&schedule, nil, corev1.EventTypeNormal, "SleepStarted", "SleepTransition",
+				"Starting sleep transition for schedule %s/%s", schedule.Namespace, schedule.Name)
+			reconcileActionsTotal.WithLabelValues("sleep").Inc()
+
 			if err := r.sleepWorkloads(ctx, &schedule); err != nil {
 				logger.Error(err, "Failed to sleep workloads")
 				return ctrl.Result{RequeueAfter: time.Minute}, err
 			}
+
+			r.Recorder.Eventf(&schedule, nil, corev1.EventTypeNormal, "SleepCompleted", "SleepTransition",
+				"Completed sleep transition for schedule %s/%s (%d workloads)", schedule.Namespace, schedule.Name, len(schedule.Status.ManagedWorkloads))
 		} else {
+			r.Recorder.Eventf(&schedule, nil, corev1.EventTypeNormal, "WakeStarted", "WakeTransition",
+				"Starting wake transition for schedule %s/%s", schedule.Namespace, schedule.Name)
+			reconcileActionsTotal.WithLabelValues("wake").Inc()
+
+			wakeStart := time.Now()
 			if err := r.wakeWorkloads(ctx, &schedule); err != nil {
 				logger.Error(err, "Failed to wake workloads")
 				return ctrl.Result{RequeueAfter: time.Minute}, err
 			}
+			wakeDurationSeconds.Observe(time.Since(wakeStart).Seconds())
+
+			r.Recorder.Eventf(&schedule, nil, corev1.EventTypeNormal, "WakeCompleted", "WakeTransition",
+				"Completed wake transition for schedule %s/%s", schedule.Namespace, schedule.Name)
 		}
+	} else if !shouldSleep && !schedule.Status.Sleeping {
+		// Steady-state awake: check for workload desync within verification window
+		if r.shouldVerifyWorkloads(&schedule, now) {
+			reconcileActionsTotal.WithLabelValues("verify").Inc()
+			if desynced, err := r.verifyAndCorrectWorkloads(ctx, &schedule); err != nil {
+				logger.Error(err, "Failed to verify workload state")
+				return ctrl.Result{RequeueAfter: verifyRequeueInterval}, err
+			} else if desynced {
+				logger.Info("Corrected desynced workloads", "schedule", schedule.Name)
+				r.Recorder.Eventf(&schedule, nil, corev1.EventTypeWarning, "DesyncCorrected", "WorkloadVerify",
+					"Detected and corrected desynced workloads for schedule %s/%s", schedule.Namespace, schedule.Name)
+			}
+		} else if len(schedule.Status.ManagedWorkloads) > 0 {
+			// Verify window expired, clear managed workloads
+			schedule.Status.ManagedWorkloads = nil
+			if err := r.Status().Update(ctx, &schedule); err != nil {
+				return ctrl.Result{}, err
+			}
+			reconcileActionsTotal.WithLabelValues("noop").Inc()
+		} else {
+			reconcileActionsTotal.WithLabelValues("noop").Inc()
+		}
+	} else {
+		reconcileActionsTotal.WithLabelValues("noop").Inc()
 	}
+
+	// Update managed workloads gauge
+	managedWorkloadsGauge.WithLabelValues(schedule.Namespace, schedule.Name).Set(float64(len(schedule.Status.ManagedWorkloads)))
 
 	if statusChanged || daysChanged {
 		schedule.Status.DaysDisplay = daysDisplay
 		if statusChanged {
-			now := metav1.Now()
+			ts := metav1.Now()
 			schedule.Status.Sleeping = shouldSleep
-			schedule.Status.LastTransitionTime = &now
+			schedule.Status.LastTransitionTime = &ts
 		}
 		if err := r.Status().Update(ctx, &schedule); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 
-	// Requeue to check again in 1 minute
-	return ctrl.Result{RequeueAfter: time.Minute}, nil
-}
-
-// shouldBeSleeping determines if workloads should be sleeping based on the schedule
-func (r *SleepScheduleReconciler) shouldBeSleeping(schedule *slumlordv1alpha1.SlumlordSleepSchedule) bool {
-	return r.shouldBeSleepingAt(schedule, time.Now())
+	// Smart requeue interval
+	requeueAfter := r.computeRequeueInterval(&schedule, now)
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // shouldBeSleepingAt determines if workloads should be sleeping at a specific time
@@ -199,6 +294,234 @@ func (r *SleepScheduleReconciler) shouldBeSleepingAt(schedule *slumlordv1alpha1.
 
 	// Normal same-day schedule
 	return now.After(startTime) && now.Before(endTime)
+}
+
+// shouldVerifyWorkloads returns true if we're within the verification window after the last wake transition.
+func (r *SleepScheduleReconciler) shouldVerifyWorkloads(schedule *slumlordv1alpha1.SlumlordSleepSchedule, now time.Time) bool {
+	if schedule.Status.LastTransitionTime == nil {
+		return false
+	}
+	if len(schedule.Status.ManagedWorkloads) == 0 {
+		return false
+	}
+	return now.Sub(schedule.Status.LastTransitionTime.Time) <= verifyWindow
+}
+
+// verifyAndCorrectWorkloads checks if managed workloads are in the correct (awake) state
+// using efficient List calls. Returns true if any correction was made.
+func (r *SleepScheduleReconciler) verifyAndCorrectWorkloads(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule) (bool, error) {
+	logger := log.FromContext(ctx)
+
+	if len(schedule.Status.ManagedWorkloads) == 0 {
+		return false, nil
+	}
+
+	// Build a lookup set from ManagedWorkloads
+	type workloadKey struct{ kind, name string }
+	managedSet := make(map[workloadKey]slumlordv1alpha1.ManagedWorkload, len(schedule.Status.ManagedWorkloads))
+	for _, mw := range schedule.Status.ManagedWorkloads {
+		managedSet[workloadKey{mw.Kind, mw.Name}] = mw
+	}
+
+	desynced := false
+
+	// Check Deployments
+	if r.shouldManageType(schedule, "Deployment") {
+		var deployments appsv1.DeploymentList
+		if err := r.List(ctx, &deployments, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
+			return false, err
+		}
+		for i := range deployments.Items {
+			d := &deployments.Items[i]
+			if mw, ok := managedSet[workloadKey{"Deployment", d.Name}]; ok {
+				if d.Spec.Replicas != nil && *d.Spec.Replicas == 0 && mw.OriginalReplicas != nil && *mw.OriginalReplicas > 0 {
+					logger.Info("Deployment desynced after wake", "name", d.Name, "expected", *mw.OriginalReplicas)
+					desynced = true
+				}
+			}
+		}
+	}
+
+	// Check StatefulSets
+	if r.shouldManageType(schedule, "StatefulSet") {
+		var statefulsets appsv1.StatefulSetList
+		if err := r.List(ctx, &statefulsets, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
+			return false, err
+		}
+		for i := range statefulsets.Items {
+			s := &statefulsets.Items[i]
+			if mw, ok := managedSet[workloadKey{"StatefulSet", s.Name}]; ok {
+				if s.Spec.Replicas != nil && *s.Spec.Replicas == 0 && mw.OriginalReplicas != nil && *mw.OriginalReplicas > 0 {
+					logger.Info("StatefulSet desynced after wake", "name", s.Name, "expected", *mw.OriginalReplicas)
+					desynced = true
+				}
+			}
+		}
+	}
+
+	// Check CronJobs
+	if r.shouldManageType(schedule, "CronJob") {
+		var cronjobs batchv1.CronJobList
+		if err := r.List(ctx, &cronjobs, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
+			return false, err
+		}
+		for i := range cronjobs.Items {
+			cj := &cronjobs.Items[i]
+			if mw, ok := managedSet[workloadKey{"CronJob", cj.Name}]; ok {
+				if cj.Spec.Suspend != nil && *cj.Spec.Suspend && mw.OriginalSuspend != nil && !*mw.OriginalSuspend {
+					logger.Info("CronJob desynced after wake", "name", cj.Name)
+					desynced = true
+				}
+			}
+		}
+	}
+
+	// Check suspend-based CRDs (FluxCD, MariaDB)
+	for _, check := range []struct {
+		kind string
+		gvk  schema.GroupVersionKind
+	}{
+		{"HelmRelease", fluxHelmReleaseGVK},
+		{"Kustomization", fluxKustomizationGVK},
+		{"MariaDB", mariadbGVK},
+		{"MaxScale", mariadbMaxScaleGVK},
+	} {
+		if !r.shouldManageType(schedule, check.kind) {
+			continue
+		}
+		resourceList := &unstructured.UnstructuredList{}
+		resourceList.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: check.gvk.Group, Version: check.gvk.Version, Kind: check.gvk.Kind + "List",
+		})
+		if err := r.List(ctx, resourceList, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
+			if apimeta.IsNoMatchError(err) {
+				continue
+			}
+			return false, err
+		}
+		for i := range resourceList.Items {
+			res := &resourceList.Items[i]
+			if mw, ok := managedSet[workloadKey{check.kind, res.GetName()}]; ok {
+				spec, _ := res.Object["spec"].(map[string]interface{})
+				if spec != nil {
+					if suspended, ok := spec["suspend"].(bool); ok && suspended && mw.OriginalSuspend != nil && !*mw.OriginalSuspend {
+						logger.Info("Resource desynced (still suspended)", "kind", check.kind, "name", res.GetName())
+						desynced = true
+					}
+				}
+			}
+		}
+	}
+
+	// Check CNPG Clusters
+	if r.shouldManageType(schedule, "Cluster") {
+		clusterList := &unstructured.UnstructuredList{}
+		clusterList.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: cnpgClusterGVK.Group, Version: cnpgClusterGVK.Version, Kind: "ClusterList",
+		})
+		if err := r.List(ctx, clusterList, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
+			if !apimeta.IsNoMatchError(err) {
+				return false, err
+			}
+		} else {
+			for i := range clusterList.Items {
+				c := &clusterList.Items[i]
+				if _, ok := managedSet[workloadKey{"Cluster", c.GetName()}]; ok {
+					annotations := c.GetAnnotations()
+					if annotations != nil && annotations[hibernationAnnotation] == "on" {
+						logger.Info("CNPG Cluster desynced (still hibernated)", "name", c.GetName())
+						desynced = true
+					}
+				}
+			}
+		}
+	}
+
+	// Check replica-based CRDs (Prometheus Operator)
+	for _, check := range []struct {
+		kind string
+		gvk  schema.GroupVersionKind
+	}{
+		{"ThanosRuler", promThanosRulerGVK},
+		{"Alertmanager", promAlertmanagerGVK},
+		{"Prometheus", promPrometheusGVK},
+	} {
+		if !r.shouldManageType(schedule, check.kind) {
+			continue
+		}
+		resourceList := &unstructured.UnstructuredList{}
+		resourceList.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: check.gvk.Group, Version: check.gvk.Version, Kind: check.gvk.Kind + "List",
+		})
+		if err := r.List(ctx, resourceList, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
+			if apimeta.IsNoMatchError(err) {
+				continue
+			}
+			return false, err
+		}
+		for i := range resourceList.Items {
+			res := &resourceList.Items[i]
+			if mw, ok := managedSet[workloadKey{check.kind, res.GetName()}]; ok {
+				spec, _ := res.Object["spec"].(map[string]interface{})
+				if spec != nil {
+					var currentReplicas int64
+					switch v := spec["replicas"].(type) {
+					case int64:
+						currentReplicas = v
+					case float64:
+						currentReplicas = int64(v)
+					}
+					if currentReplicas == 0 && mw.OriginalReplicas != nil && *mw.OriginalReplicas > 0 {
+						logger.Info("Resource desynced (still at 0 replicas)", "kind", check.kind, "name", res.GetName())
+						desynced = true
+					}
+				}
+			}
+		}
+	}
+
+	if desynced {
+		logger.Info("Re-running wake to correct desynced workloads", "schedule", schedule.Name)
+		if err := r.wakeWorkloads(ctx, schedule); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// computeRequeueInterval returns the optimal requeue duration based on the schedule state.
+func (r *SleepScheduleReconciler) computeRequeueInterval(schedule *slumlordv1alpha1.SlumlordSleepSchedule, now time.Time) time.Duration {
+	// During verification window, requeue quickly to detect desync
+	if !schedule.Status.Sleeping && r.shouldVerifyWorkloads(schedule, now) {
+		return verifyRequeueInterval
+	}
+
+	// Check time until next transition
+	next := r.timeUntilNextTransition(schedule, now)
+	if next > 0 && next <= approachingWindow {
+		return approachingRequeueInterval
+	}
+
+	return idleRequeueInterval
+}
+
+// timeUntilNextTransition calculates the duration until the next sleep/wake boundary.
+// Returns 0 if no transition is found within 24 hours.
+func (r *SleepScheduleReconciler) timeUntilNextTransition(schedule *slumlordv1alpha1.SlumlordSleepSchedule, now time.Time) time.Duration {
+	currentState := r.shouldBeSleepingAt(schedule, now)
+
+	// Probe every minute for the next 24 hours to find when state changes.
+	// This is O(1440) pure computation with no I/O.
+	for i := 1; i <= 1440; i++ {
+		probe := now.Add(time.Duration(i) * time.Minute)
+		if r.shouldBeSleepingAt(schedule, probe) != currentState {
+			return time.Duration(i) * time.Minute
+		}
+	}
+
+	return 0
 }
 
 // sleepWorkloads scales down or suspends matched workloads
@@ -378,7 +701,8 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 	return nil
 }
 
-// wakeWorkloads restores workloads to their original state
+// wakeWorkloads restores workloads to their original state.
+// ManagedWorkloads is preserved after wake for verification; cleared by Reconcile after verify window.
 func (r *SleepScheduleReconciler) wakeWorkloads(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule) error {
 	logger := log.FromContext(ctx)
 
@@ -489,7 +813,8 @@ func (r *SleepScheduleReconciler) wakeWorkloads(ctx context.Context, schedule *s
 		}
 	}
 
-	schedule.Status.ManagedWorkloads = nil
+	// ManagedWorkloads intentionally NOT cleared here.
+	// Reconcile will clear them after the verification window expires.
 	return nil
 }
 
@@ -717,5 +1042,6 @@ func daysToDisplay(days []int) string {
 func (r *SleepScheduleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&slumlordv1alpha1.SlumlordSleepSchedule{}).
+		WithOptions(crcontroller.Options{MaxConcurrentReconciles: 5}).
 		Complete(r)
 }
