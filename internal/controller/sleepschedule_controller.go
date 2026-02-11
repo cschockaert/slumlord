@@ -96,7 +96,7 @@ var (
 		prometheus.HistogramOpts{
 			Name:    "slumlord_wake_duration_seconds",
 			Help:    "Duration of wake operations in seconds",
-			Buckets: prometheus.DefBuckets,
+			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300},
 		},
 	)
 
@@ -141,6 +141,8 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Fetch the SlumlordSleepSchedule
 	var schedule slumlordv1alpha1.SlumlordSleepSchedule
 	if err := r.Get(ctx, req.NamespacedName, &schedule); err != nil {
+		// Clean up gauge for deleted schedules to prevent cardinality leak
+		managedWorkloadsGauge.DeleteLabelValues(req.Namespace, req.Name)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -195,6 +197,7 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			reconcileActionsTotal.WithLabelValues("verify").Inc()
 			if desynced, err := r.verifyAndCorrectWorkloads(ctx, &schedule); err != nil {
 				logger.Error(err, "Failed to verify workload state")
+				return ctrl.Result{RequeueAfter: verifyRequeueInterval}, err
 			} else if desynced {
 				logger.Info("Corrected desynced workloads", "schedule", schedule.Name)
 				r.Recorder.Eventf(&schedule, nil, corev1.EventTypeWarning, "DesyncCorrected", "WorkloadVerify",
@@ -232,11 +235,6 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Smart requeue interval
 	requeueAfter := r.computeRequeueInterval(&schedule, now)
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
-}
-
-// shouldBeSleeping determines if workloads should be sleeping based on the schedule
-func (r *SleepScheduleReconciler) shouldBeSleeping(schedule *slumlordv1alpha1.SlumlordSleepSchedule) bool {
-	return r.shouldBeSleepingAt(schedule, time.Now())
 }
 
 // shouldBeSleepingAt determines if workloads should be sleeping at a specific time
