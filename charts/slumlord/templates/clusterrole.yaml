@@ -123,6 +123,14 @@ rules:
       - patch
       - update
       - watch
+  # Events (sleep schedule transitions)
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
   # SlumlordIdleDetector read-only (dashboard needs these even when controller is disabled)
   - apiGroups:
       - slumlord.io

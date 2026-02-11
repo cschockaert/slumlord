@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Workload state verification after wake transitions (10-minute window detects and corrects desynced workloads)
+- Kubernetes events on SleepSchedule CRDs for sleep/wake transitions and desync corrections
+- Prometheus metrics: `slumlord_reconcile_actions_total`, `slumlord_wake_duration_seconds`, `slumlord_managed_workloads`
+- Smart requeue intervals: 5min idle, 30s approaching transition, 30s during verification window
+- `MaxConcurrentReconciles=5` for SleepScheduleReconciler (parallel namespace reconciliation)
+
+### Changed
+
+- Reduced log noise: no-op reconciliations now log at debug level (V1) instead of INFO
+- Increased default memory limit from 128Mi to 256Mi
+
+### Fixed
+
+- Wake-up taking hours on clusters with 120+ SleepSchedule CRDs ([#40](https://github.com/cschockaert/slumlord/issues/40))
+
 ## [2.6.0] - 2026-02-10
 
 ### Added
