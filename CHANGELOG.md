@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-02-12
+
 ### Changed
 
 - Default logging to production mode (JSON encoder, info level) instead of development mode
@@ -187,7 +189,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.9.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.10.0...HEAD
+[2.10.0]: https://github.com/cschockaert/slumlord/compare/2.9.0...2.10.0
 [2.9.0]: https://github.com/cschockaert/slumlord/compare/2.8.0...2.9.0
 [2.8.0]: https://github.com/cschockaert/slumlord/compare/2.7.0...2.8.0
 [2.7.0]: https://github.com/cschockaert/slumlord/compare/2.6.0...2.7.0
