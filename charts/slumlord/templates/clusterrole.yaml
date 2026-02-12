@@ -173,6 +173,15 @@ rules:
     verbs:
       - get
       - list
+  # Pods (for in-place resize)
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - patch
   {{- end }}
   # SlumlordNodeDrainPolicy read-only (dashboard needs these even when controller is disabled)
   - apiGroups:

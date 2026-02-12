@@ -60,9 +60,11 @@ make uninstall
   - `spec.selector`: Label selector, name patterns (wildcards), and workload types (Deployment, StatefulSet, CronJob)
   - `spec.thresholds`: CPU/memory usage thresholds (0-100%)
   - `spec.idleDuration`: How long a workload must be idle before action (Go duration: `30m`, `1h`)
-  - `spec.action`: `alert` (report only) or `scale` (auto-scale to zero)
+  - `spec.action`: `alert` (report only), `scale` (auto-scale to zero), or `resize` (right-size pod requests in-place via K8s 1.33 In-Place Pod Resize)
+  - `spec.resize`: Configuration for resize action (`bufferPercent`, `minRequests` with CPU/memory floor)
   - `status.idleWorkloads`: Currently detected idle workloads with timestamps
   - `status.scaledWorkloads`: Workloads scaled down with original state for restoration
+  - `status.resizedWorkloads`: Workloads with in-place resized pod requests, with original state for restoration
   - **Note**: Requires metrics-server in the cluster. Without it, runs in degraded mode (always returns not-idle).
 
 ### Controller (internal/controller/)
@@ -79,6 +81,7 @@ make uninstall
   - Status persisted after each scale-down to prevent data loss on partial failure
   - Restore only clears successfully restored workloads; failed ones retained for retry
   - Finalizer ensures workloads are restored on detector deletion
+  - Resize action: patches pod requests in-place (never modifies Deployment/StatefulSet spec), computes target from actual usage + buffer, respects minRequests floor
 
 ### Helm Chart (charts/slumlord/)
 

@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -17,9 +19,43 @@ type SlumlordIdleDetectorSpec struct {
 	IdleDuration string `json:"idleDuration"`
 
 	// Action defines what to do when a workload is detected as idle
-	// Valid values: "alert", "scale"
-	// +kubebuilder:validation:Enum=alert;scale
+	// Valid values: "alert", "scale", "resize"
+	// +kubebuilder:validation:Enum=alert;scale;resize
 	Action string `json:"action"`
+
+	// Resize configures the resize action parameters. Required when action=resize.
+	// +optional
+	Resize *ResizeConfig `json:"resize,omitempty"`
+}
+
+// ResizeConfig defines the configuration for the resize action
+type ResizeConfig struct {
+	// BufferPercent is the percentage of headroom to add above actual usage
+	// when computing target requests. E.g., 25 means target = usage * 1.25
+	// +optional
+	// +kubebuilder:default=25
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=200
+	BufferPercent *int32 `json:"bufferPercent,omitempty"`
+
+	// MinRequests defines the minimum resource requests floor.
+	// The controller will never resize below these values.
+	// +optional
+	MinRequests *MinRequests `json:"minRequests,omitempty"`
+}
+
+// MinRequests defines minimum resource requests that the resize action
+// will never go below, to prevent starving the workload.
+type MinRequests struct {
+	// CPU is the minimum CPU request (e.g., "50m", "100m")
+	// +optional
+	// +kubebuilder:default="50m"
+	CPU *resource.Quantity `json:"cpu,omitempty"`
+
+	// Memory is the minimum memory request (e.g., "64Mi", "128Mi")
+	// +optional
+	// +kubebuilder:default="64Mi"
+	Memory *resource.Quantity `json:"memory,omitempty"`
 }
 
 // IdleThresholds defines CPU and memory thresholds for idle detection
@@ -48,6 +84,10 @@ type SlumlordIdleDetectorStatus struct {
 	// ScaledWorkloads tracks workloads that have been scaled down due to idleness
 	// +optional
 	ScaledWorkloads []ScaledWorkload `json:"scaledWorkloads,omitempty"`
+
+	// ResizedWorkloads tracks workloads whose pod requests were resized in-place
+	// +optional
+	ResizedWorkloads []ResizedWorkload `json:"resizedWorkloads,omitempty"`
 
 	// LastCheckTime is the last time idle detection was performed
 	// +optional
@@ -92,6 +132,27 @@ type ScaledWorkload struct {
 
 	// ScaledAt is when the workload was scaled down
 	ScaledAt metav1.Time `json:"scaledAt"`
+}
+
+// ResizedWorkload tracks a workload whose pod requests were resized in-place
+type ResizedWorkload struct {
+	// Kind is the workload kind (Deployment, StatefulSet)
+	Kind string `json:"kind"`
+
+	// Name is the workload name
+	Name string `json:"name"`
+
+	// OriginalRequests stores the original resource requests before resize
+	OriginalRequests corev1.ResourceList `json:"originalRequests"`
+
+	// CurrentRequests stores the current (resized) resource requests
+	CurrentRequests corev1.ResourceList `json:"currentRequests"`
+
+	// ResizedAt is when the workload pods were last resized
+	ResizedAt metav1.Time `json:"resizedAt"`
+
+	// PodCount is the number of pods that were resized
+	PodCount int32 `json:"podCount"`
 }
 
 // +kubebuilder:object:root=true

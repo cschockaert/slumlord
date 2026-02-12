@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -1675,5 +1676,537 @@ func TestCheckCronJobMetrics_WithActiveJob(t *testing.T) {
 	}
 	if memPct == nil || *memPct > 10 {
 		t.Errorf("Expected low memory percent, got %v", memPct)
+	}
+}
+
+// --- Unit tests for resize action ---
+
+func TestIdleDetector_ResizeIdleWorkloads_BasicResize(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	replicas := int32(1)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "idle-app",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "app", Image: "nginx",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("1000m"),
+									corev1.ResourceMemory: resource.MustParse("1Gi"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	pod := makePod("idle-app-pod-1", namespace, "1000m", "1Gi")
+	pod.Labels = map[string]string{"app": "test"}
+
+	bufferPercent := int32(25)
+	minCPU := resource.MustParse("50m")
+	minMem := resource.MustParse("64Mi")
+
+	detector := &slumlordv1alpha1.SlumlordIdleDetector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-detector",
+			Namespace:  namespace,
+			Finalizers: []string{idleDetectorFinalizer},
+		},
+		Spec: slumlordv1alpha1.SlumlordIdleDetectorSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Thresholds:   slumlordv1alpha1.IdleThresholds{CPUPercent: int32Ptr(20), MemoryPercent: int32Ptr(20)},
+			IdleDuration: "1h",
+			Action:       "resize",
+			Resize: &slumlordv1alpha1.ResizeConfig{
+				BufferPercent: &bufferPercent,
+				MinRequests: &slumlordv1alpha1.MinRequests{
+					CPU:    &minCPU,
+					Memory: &minMem,
+				},
+			},
+		},
+		Status: slumlordv1alpha1.SlumlordIdleDetectorStatus{
+			IdleWorkloads: []slumlordv1alpha1.IdleWorkload{
+				{
+					Kind:      "Deployment",
+					Name:      "idle-app",
+					IdleSince: metav1.NewTime(time.Now().Add(-2 * time.Hour)),
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deploy, pod, detector).
+		WithStatusSubresource(detector).
+		Build()
+
+	fakeMetrics := newFakeMetricsClient(
+		*makePodMetrics("idle-app-pod-1", namespace, "50m", "100Mi"),
+	)
+
+	reconciler := &IdleDetectorReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		MetricsClient: fakeMetrics,
+	}
+
+	err := reconciler.resizeIdleWorkloads(ctx, detector, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("resizeIdleWorkloads() error = %v", err)
+	}
+
+	// Verify resized workload tracked
+	if len(detector.Status.ResizedWorkloads) != 1 {
+		t.Fatalf("Expected 1 resized workload, got %d", len(detector.Status.ResizedWorkloads))
+	}
+	resized := detector.Status.ResizedWorkloads[0]
+	if resized.Kind != "Deployment" || resized.Name != "idle-app" {
+		t.Errorf("Expected Deployment/idle-app, got %s/%s", resized.Kind, resized.Name)
+	}
+	if resized.PodCount != 1 {
+		t.Errorf("Expected PodCount = 1, got %d", resized.PodCount)
+	}
+	// Original should be 1000m CPU
+	origCPU := resized.OriginalRequests[corev1.ResourceCPU]
+	if origCPU.MilliValue() != 1000 {
+		t.Errorf("Expected original CPU = 1000m, got %dm", origCPU.MilliValue())
+	}
+}
+
+func TestIdleDetector_ResizeIdleWorkloads_FloorApplied(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	replicas := int32(1)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "floor-app",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "app", Image: "nginx",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("1000m"),
+									corev1.ResourceMemory: resource.MustParse("1Gi"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	pod := makePod("floor-app-pod-1", namespace, "1000m", "1Gi")
+	pod.Labels = map[string]string{"app": "test"}
+
+	bufferPercent := int32(25)
+	minCPU := resource.MustParse("50m")
+	minMem := resource.MustParse("64Mi")
+
+	detector := &slumlordv1alpha1.SlumlordIdleDetector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-detector",
+			Namespace:  namespace,
+			Finalizers: []string{idleDetectorFinalizer},
+		},
+		Spec: slumlordv1alpha1.SlumlordIdleDetectorSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Thresholds:   slumlordv1alpha1.IdleThresholds{CPUPercent: int32Ptr(20)},
+			IdleDuration: "1h",
+			Action:       "resize",
+			Resize: &slumlordv1alpha1.ResizeConfig{
+				BufferPercent: &bufferPercent,
+				MinRequests: &slumlordv1alpha1.MinRequests{
+					CPU:    &minCPU,
+					Memory: &minMem,
+				},
+			},
+		},
+		Status: slumlordv1alpha1.SlumlordIdleDetectorStatus{
+			IdleWorkloads: []slumlordv1alpha1.IdleWorkload{
+				{
+					Kind:      "Deployment",
+					Name:      "floor-app",
+					IdleSince: metav1.NewTime(time.Now().Add(-2 * time.Hour)),
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deploy, pod, detector).
+		WithStatusSubresource(detector).
+		Build()
+
+	// Very low usage: 10m CPU, 20Mi memory
+	fakeMetrics := newFakeMetricsClient(
+		*makePodMetrics("floor-app-pod-1", namespace, "10m", "20Mi"),
+	)
+
+	reconciler := &IdleDetectorReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		MetricsClient: fakeMetrics,
+	}
+
+	err := reconciler.resizeIdleWorkloads(ctx, detector, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("resizeIdleWorkloads() error = %v", err)
+	}
+
+	if len(detector.Status.ResizedWorkloads) != 1 {
+		t.Fatalf("Expected 1 resized workload, got %d", len(detector.Status.ResizedWorkloads))
+	}
+
+	// Current requests should be at least the floor
+	currentCPU := detector.Status.ResizedWorkloads[0].CurrentRequests[corev1.ResourceCPU]
+	currentMem := detector.Status.ResizedWorkloads[0].CurrentRequests[corev1.ResourceMemory]
+
+	if currentCPU.MilliValue() < 50 {
+		t.Errorf("Expected CPU >= 50m (floor), got %dm", currentCPU.MilliValue())
+	}
+	if currentMem.Value() < 64*1024*1024 {
+		t.Errorf("Expected memory >= 64Mi (floor), got %d", currentMem.Value())
+	}
+}
+
+func TestIdleDetector_ResizeIdleWorkloads_SkipsCronJob(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	detector := &slumlordv1alpha1.SlumlordIdleDetector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-detector",
+			Namespace:  namespace,
+			Finalizers: []string{idleDetectorFinalizer},
+		},
+		Spec: slumlordv1alpha1.SlumlordIdleDetectorSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				Types: []string{"CronJob"},
+			},
+			Thresholds:   slumlordv1alpha1.IdleThresholds{CPUPercent: int32Ptr(20)},
+			IdleDuration: "1h",
+			Action:       "resize",
+		},
+		Status: slumlordv1alpha1.SlumlordIdleDetectorStatus{
+			IdleWorkloads: []slumlordv1alpha1.IdleWorkload{
+				{
+					Kind:      "CronJob",
+					Name:      "my-cronjob",
+					IdleSince: metav1.NewTime(time.Now().Add(-2 * time.Hour)),
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(detector).
+		WithStatusSubresource(detector).
+		Build()
+
+	fakeMetrics := newFakeMetricsClient()
+
+	reconciler := &IdleDetectorReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		MetricsClient: fakeMetrics,
+	}
+
+	err := reconciler.resizeIdleWorkloads(ctx, detector, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("resizeIdleWorkloads() error = %v", err)
+	}
+
+	// CronJob should be skipped - no resized workloads
+	if len(detector.Status.ResizedWorkloads) != 0 {
+		t.Errorf("Expected 0 resized workloads (CronJob skipped), got %d", len(detector.Status.ResizedWorkloads))
+	}
+}
+
+func TestIdleDetector_ResizeIdleWorkloads_NotIdleLongEnough(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	replicas := int32(1)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "recent-idle",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "app", Image: "nginx"}},
+				},
+			},
+		},
+	}
+
+	detector := &slumlordv1alpha1.SlumlordIdleDetector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-detector",
+			Namespace:  namespace,
+			Finalizers: []string{idleDetectorFinalizer},
+		},
+		Spec: slumlordv1alpha1.SlumlordIdleDetectorSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Thresholds:   slumlordv1alpha1.IdleThresholds{CPUPercent: int32Ptr(20)},
+			IdleDuration: "1h",
+			Action:       "resize",
+		},
+		Status: slumlordv1alpha1.SlumlordIdleDetectorStatus{
+			IdleWorkloads: []slumlordv1alpha1.IdleWorkload{
+				{
+					Kind:      "Deployment",
+					Name:      "recent-idle",
+					IdleSince: metav1.NewTime(time.Now().Add(-10 * time.Minute)), // only 10 min ago
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deploy, detector).
+		WithStatusSubresource(detector).
+		Build()
+
+	fakeMetrics := newFakeMetricsClient()
+
+	reconciler := &IdleDetectorReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		MetricsClient: fakeMetrics,
+	}
+
+	err := reconciler.resizeIdleWorkloads(ctx, detector, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("resizeIdleWorkloads() error = %v", err)
+	}
+
+	if len(detector.Status.ResizedWorkloads) != 0 {
+		t.Errorf("Expected 0 resized workloads (not idle long enough), got %d", len(detector.Status.ResizedWorkloads))
+	}
+}
+
+func TestIdleDetector_RestoreNoLongerIdleResizedWorkloads(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	replicas := int32(1)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "recovered-app",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "app", Image: "nginx",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("50m"),
+									corev1.ResourceMemory: resource.MustParse("64Mi"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Pod with current (resized) requests
+	pod := makePod("recovered-app-pod-1", namespace, "50m", "64Mi")
+	pod.Labels = map[string]string{"app": "test"}
+
+	detector := &slumlordv1alpha1.SlumlordIdleDetector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-detector",
+			Namespace:  namespace,
+			Finalizers: []string{idleDetectorFinalizer},
+		},
+		Spec: slumlordv1alpha1.SlumlordIdleDetectorSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Thresholds:   slumlordv1alpha1.IdleThresholds{CPUPercent: int32Ptr(20)},
+			IdleDuration: "1h",
+			Action:       "resize",
+		},
+		Status: slumlordv1alpha1.SlumlordIdleDetectorStatus{
+			// NOTE: IdleWorkloads is EMPTY - the workload recovered
+			IdleWorkloads: nil,
+			ResizedWorkloads: []slumlordv1alpha1.ResizedWorkload{
+				{
+					Kind: "Deployment",
+					Name: "recovered-app",
+					OriginalRequests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("512Mi"),
+					},
+					CurrentRequests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("50m"),
+						corev1.ResourceMemory: resource.MustParse("64Mi"),
+					},
+					ResizedAt: metav1.Now(),
+					PodCount:  1,
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deploy, pod, detector).
+		WithStatusSubresource(detector).
+		Build()
+
+	reconciler := &IdleDetectorReconciler{
+		Client: fakeClient,
+		Scheme: scheme,
+	}
+
+	err := reconciler.restoreNoLongerIdleResizedWorkloads(ctx, detector)
+	if err != nil {
+		t.Fatalf("restoreNoLongerIdleResizedWorkloads() error = %v", err)
+	}
+
+	// Resized workloads should be cleared
+	if len(detector.Status.ResizedWorkloads) != 0 {
+		t.Errorf("Expected 0 resized workloads after restore, got %d", len(detector.Status.ResizedWorkloads))
+	}
+
+	// Pod should have original requests restored
+	var updatedPod corev1.Pod
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "recovered-app-pod-1", Namespace: namespace}, &updatedPod); err != nil {
+		t.Fatalf("Failed to get pod: %v", err)
+	}
+	cpuReq := updatedPod.Spec.Containers[0].Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.MilliValue() != 500 {
+		t.Errorf("Expected restored CPU = 500m, got %dm", cpuReq.MilliValue())
+	}
+}
+
+func TestIdleDetector_ResizeIdleWorkloads_AlreadyResized(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	detector := &slumlordv1alpha1.SlumlordIdleDetector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-detector",
+			Namespace:  namespace,
+			Finalizers: []string{idleDetectorFinalizer},
+		},
+		Spec: slumlordv1alpha1.SlumlordIdleDetectorSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				Types: []string{"Deployment"},
+			},
+			Thresholds:   slumlordv1alpha1.IdleThresholds{CPUPercent: int32Ptr(20)},
+			IdleDuration: "1h",
+			Action:       "resize",
+		},
+		Status: slumlordv1alpha1.SlumlordIdleDetectorStatus{
+			IdleWorkloads: []slumlordv1alpha1.IdleWorkload{
+				{
+					Kind:      "Deployment",
+					Name:      "already-resized",
+					IdleSince: metav1.NewTime(time.Now().Add(-2 * time.Hour)),
+				},
+			},
+			ResizedWorkloads: []slumlordv1alpha1.ResizedWorkload{
+				{
+					Kind: "Deployment",
+					Name: "already-resized",
+					OriginalRequests: corev1.ResourceList{
+						corev1.ResourceCPU: resource.MustParse("500m"),
+					},
+					CurrentRequests: corev1.ResourceList{
+						corev1.ResourceCPU: resource.MustParse("50m"),
+					},
+					ResizedAt: metav1.Now(),
+					PodCount:  1,
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(detector).
+		WithStatusSubresource(detector).
+		Build()
+
+	fakeMetrics := newFakeMetricsClient()
+
+	reconciler := &IdleDetectorReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		MetricsClient: fakeMetrics,
+	}
+
+	err := reconciler.resizeIdleWorkloads(ctx, detector, 1*time.Hour)
+	if err != nil {
+		t.Fatalf("resizeIdleWorkloads() error = %v", err)
+	}
+
+	// Should still have exactly 1 resized workload (not duplicated)
+	if len(detector.Status.ResizedWorkloads) != 1 {
+		t.Errorf("Expected 1 resized workload (unchanged), got %d", len(detector.Status.ResizedWorkloads))
 	}
 }

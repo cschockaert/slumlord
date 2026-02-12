@@ -46,7 +46,7 @@ type IdleDetectorReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;patch
 // +kubebuilder:rbac:groups=metrics.k8s.io,resources=pods,verbs=get;list
 
 // Reconcile handles the reconciliation loop for SlumlordIdleDetector
@@ -67,6 +67,13 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				// Persist partial restore progress before returning error
 				if statusErr := r.Status().Update(ctx, &detector); statusErr != nil {
 					logger.Error(statusErr, "Failed to persist restore progress")
+				}
+				return ctrl.Result{}, err
+			}
+
+			if err := r.restoreResizedWorkloads(ctx, &detector); err != nil {
+				if statusErr := r.Status().Update(ctx, &detector); statusErr != nil {
+					logger.Error(statusErr, "Failed to persist resize restore progress")
 				}
 				return ctrl.Result{}, err
 			}
@@ -93,6 +100,14 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	for _, t := range detector.Spec.Selector.Types {
 		if !supportedIdleDetectorTypes[t] {
 			logger.Info("Unsupported workload type for idle detector, skipping", "type", t)
+		}
+	}
+
+	if detector.Spec.Action == "resize" {
+		for _, t := range detector.Spec.Selector.Types {
+			if t == "CronJob" {
+				logger.Info("CronJob type in selector is ignored for resize action (no long-running pods to resize)")
+			}
 		}
 	}
 
@@ -126,6 +141,16 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			// Persist any status changes accumulated so far
 			if statusErr := r.Status().Update(ctx, &detector); statusErr != nil {
 				logger.Error(statusErr, "Failed to persist status after scale error")
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Minute}, err
+		}
+	}
+
+	if detector.Spec.Action == "resize" {
+		if err := r.resizeIdleWorkloads(ctx, &detector, idleDuration); err != nil {
+			logger.Error(err, "Failed to resize idle workloads")
+			if statusErr := r.Status().Update(ctx, &detector); statusErr != nil {
+				logger.Error(statusErr, "Failed to persist status after resize error")
 			}
 			return ctrl.Result{RequeueAfter: 5 * time.Minute}, err
 		}
@@ -756,6 +781,303 @@ func (r *IdleDetectorReconciler) restoreScaledWorkloads(ctx context.Context, det
 
 	if lastErr != nil {
 		return fmt.Errorf("some workloads failed to restore: %w", lastErr)
+	}
+	return nil
+}
+
+// resizeIdleWorkloads resizes pod requests for workloads that have been idle for longer than idleDuration.
+// Only Deployments and StatefulSets are resized (CronJobs are skipped).
+func (r *IdleDetectorReconciler) resizeIdleWorkloads(ctx context.Context, detector *slumlordv1alpha1.SlumlordIdleDetector, idleDuration time.Duration) error {
+	logger := log.FromContext(ctx)
+	now := time.Now()
+
+	// Get resize config with defaults
+	bufferPercent := int32(25)
+	minCPU := resource.MustParse("50m")
+	minMem := resource.MustParse("64Mi")
+	if detector.Spec.Resize != nil {
+		if detector.Spec.Resize.BufferPercent != nil {
+			bufferPercent = *detector.Spec.Resize.BufferPercent
+		}
+		if detector.Spec.Resize.MinRequests != nil {
+			if detector.Spec.Resize.MinRequests.CPU != nil {
+				minCPU = *detector.Spec.Resize.MinRequests.CPU
+			}
+			if detector.Spec.Resize.MinRequests.Memory != nil {
+				minMem = *detector.Spec.Resize.MinRequests.Memory
+			}
+		}
+	}
+
+	// Resize idle workloads
+	for _, idle := range detector.Status.IdleWorkloads {
+		// Skip CronJobs — they have no long-running pods to resize
+		if idle.Kind == "CronJob" {
+			continue
+		}
+
+		// Check if idle long enough
+		if now.Sub(idle.IdleSince.Time) < idleDuration {
+			continue
+		}
+
+		// Check if already resized
+		alreadyResized := false
+		for _, resized := range detector.Status.ResizedWorkloads {
+			if resized.Kind == idle.Kind && resized.Name == idle.Name {
+				alreadyResized = true
+				break
+			}
+		}
+		if alreadyResized {
+			continue
+		}
+
+		// Get pods for this workload
+		pods, err := r.getPodsForWorkload(ctx, idle.Kind, idle.Name, detector.Namespace)
+		if err != nil {
+			logger.Error(err, "Failed to get pods for resize", "kind", idle.Kind, "name", idle.Name)
+			continue
+		}
+		if len(pods) == 0 {
+			continue
+		}
+
+		// Get metrics to compute target requests
+		podMetricsList, err := r.MetricsClient.MetricsV1beta1().PodMetricses(detector.Namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			logger.Error(err, "Failed to get pod metrics for resize", "kind", idle.Kind, "name", idle.Name)
+			continue
+		}
+
+		// Build pod name set
+		podNames := make(map[string]bool, len(pods))
+		for _, p := range pods {
+			podNames[p.Name] = true
+		}
+
+		// Capture original requests from the first pod (all pods of a workload have the same spec)
+		originalRequests := make(corev1.ResourceList)
+		for _, c := range pods[0].Spec.Containers {
+			if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+				originalRequests[corev1.ResourceCPU] = cpu
+			}
+			if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+				originalRequests[corev1.ResourceMemory] = mem
+			}
+		}
+
+		// Aggregate actual usage from metrics
+		var totalCPUUsage, totalMemUsage resource.Quantity
+		matchedPods := 0
+		for _, pm := range podMetricsList.Items {
+			if !podNames[pm.Name] {
+				continue
+			}
+			matchedPods++
+			for _, c := range pm.Containers {
+				if cpu, ok := c.Usage[corev1.ResourceCPU]; ok {
+					totalCPUUsage.Add(cpu)
+				}
+				if mem, ok := c.Usage[corev1.ResourceMemory]; ok {
+					totalMemUsage.Add(mem)
+				}
+			}
+		}
+
+		if matchedPods == 0 {
+			logger.V(1).Info("No metrics found for pods, skipping resize", "kind", idle.Kind, "name", idle.Name)
+			continue
+		}
+
+		// Compute per-pod average usage
+		avgCPUMillis := totalCPUUsage.MilliValue() / int64(matchedPods)
+		avgMemBytes := totalMemUsage.Value() / int64(matchedPods)
+
+		// Compute target with buffer: target = usage * (1 + bufferPercent/100)
+		targetCPUMillis := avgCPUMillis * int64(100+bufferPercent) / 100
+		targetMemBytes := avgMemBytes * int64(100+bufferPercent) / 100
+
+		// Apply floor (minRequests)
+		if targetCPUMillis < minCPU.MilliValue() {
+			targetCPUMillis = minCPU.MilliValue()
+		}
+		if targetMemBytes < minMem.Value() {
+			targetMemBytes = minMem.Value()
+		}
+
+		// Cap: never increase beyond original requests
+		if origCPU, ok := originalRequests[corev1.ResourceCPU]; ok {
+			if targetCPUMillis > origCPU.MilliValue() {
+				targetCPUMillis = origCPU.MilliValue()
+			}
+		}
+		if origMem, ok := originalRequests[corev1.ResourceMemory]; ok {
+			if targetMemBytes > origMem.Value() {
+				targetMemBytes = origMem.Value()
+			}
+		}
+
+		targetCPU := *resource.NewMilliQuantity(targetCPUMillis, resource.DecimalSI)
+		targetMem := *resource.NewQuantity(targetMemBytes, resource.BinarySI)
+
+		// Resize each pod
+		resizedCount := int32(0)
+		for i := range pods {
+			pod := &pods[i]
+			needsResize := false
+
+			for _, c := range pod.Spec.Containers {
+				if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok && targetCPU.Cmp(cpu) < 0 {
+					needsResize = true
+					break
+				}
+				if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok && targetMem.Cmp(mem) < 0 {
+					needsResize = true
+					break
+				}
+			}
+
+			if !needsResize {
+				continue
+			}
+
+			patch := client.MergeFrom(pod.DeepCopy())
+			for j := range pod.Spec.Containers {
+				if pod.Spec.Containers[j].Resources.Requests == nil {
+					pod.Spec.Containers[j].Resources.Requests = make(corev1.ResourceList)
+				}
+				pod.Spec.Containers[j].Resources.Requests[corev1.ResourceCPU] = targetCPU
+				pod.Spec.Containers[j].Resources.Requests[corev1.ResourceMemory] = targetMem
+				// DO NOT touch Limits
+			}
+			if err := r.Patch(ctx, pod, patch); err != nil {
+				logger.Error(err, "Failed to resize pod", "pod", pod.Name)
+				continue
+			}
+			resizedCount++
+		}
+
+		if resizedCount > 0 {
+			currentRequests := corev1.ResourceList{
+				corev1.ResourceCPU:    targetCPU,
+				corev1.ResourceMemory: targetMem,
+			}
+
+			detector.Status.ResizedWorkloads = append(detector.Status.ResizedWorkloads, slumlordv1alpha1.ResizedWorkload{
+				Kind:             idle.Kind,
+				Name:             idle.Name,
+				OriginalRequests: originalRequests,
+				CurrentRequests:  currentRequests,
+				ResizedAt:        metav1.Now(),
+				PodCount:         resizedCount,
+			})
+			logger.Info("Resized idle workload pods", "kind", idle.Kind, "name", idle.Name,
+				"pods", resizedCount, "targetCPU", targetCPU.String(), "targetMem", targetMem.String())
+
+			// Persist status immediately after each resize
+			if err := r.Status().Update(ctx, detector); err != nil {
+				return fmt.Errorf("failed to persist status after resizing %s/%s: %w", idle.Kind, idle.Name, err)
+			}
+		}
+	}
+
+	// Restore workloads that are no longer idle
+	if err := r.restoreNoLongerIdleResizedWorkloads(ctx, detector); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// restoreNoLongerIdleResizedWorkloads restores original requests for workloads that are no longer idle.
+func (r *IdleDetectorReconciler) restoreNoLongerIdleResizedWorkloads(ctx context.Context, detector *slumlordv1alpha1.SlumlordIdleDetector) error {
+	logger := log.FromContext(ctx)
+
+	// Build set of currently idle workload names
+	idleSet := make(map[string]bool)
+	for _, idle := range detector.Status.IdleWorkloads {
+		idleSet[idle.Kind+"/"+idle.Name] = true
+	}
+
+	var remaining []slumlordv1alpha1.ResizedWorkload
+	for _, resized := range detector.Status.ResizedWorkloads {
+		key := resized.Kind + "/" + resized.Name
+		if idleSet[key] {
+			// Still idle, keep tracking
+			remaining = append(remaining, resized)
+			continue
+		}
+
+		// No longer idle — restore original requests
+		logger.Info("Workload no longer idle, restoring original requests", "kind", resized.Kind, "name", resized.Name)
+		if err := r.restorePodRequests(ctx, detector.Namespace, resized); err != nil {
+			logger.Error(err, "Failed to restore pod requests", "kind", resized.Kind, "name", resized.Name)
+			remaining = append(remaining, resized)
+			continue
+		}
+	}
+
+	detector.Status.ResizedWorkloads = remaining
+	if err := r.Status().Update(ctx, detector); err != nil {
+		return fmt.Errorf("failed to persist status after restoring resized workloads: %w", err)
+	}
+	return nil
+}
+
+// restorePodRequests restores the original resource requests on all pods of a workload.
+func (r *IdleDetectorReconciler) restorePodRequests(ctx context.Context, namespace string, resized slumlordv1alpha1.ResizedWorkload) error {
+	logger := log.FromContext(ctx)
+
+	pods, err := r.getPodsForWorkload(ctx, resized.Kind, resized.Name, namespace)
+	if err != nil {
+		return err
+	}
+
+	for i := range pods {
+		pod := &pods[i]
+		patch := client.MergeFrom(pod.DeepCopy())
+		for j := range pod.Spec.Containers {
+			if pod.Spec.Containers[j].Resources.Requests == nil {
+				pod.Spec.Containers[j].Resources.Requests = make(corev1.ResourceList)
+			}
+			if cpu, ok := resized.OriginalRequests[corev1.ResourceCPU]; ok {
+				pod.Spec.Containers[j].Resources.Requests[corev1.ResourceCPU] = cpu
+			}
+			if mem, ok := resized.OriginalRequests[corev1.ResourceMemory]; ok {
+				pod.Spec.Containers[j].Resources.Requests[corev1.ResourceMemory] = mem
+			}
+		}
+		if err := r.Patch(ctx, pod, patch); err != nil {
+			logger.Error(err, "Failed to restore pod requests", "pod", pod.Name)
+			return err
+		}
+	}
+
+	logger.Info("Restored original requests", "kind", resized.Kind, "name", resized.Name, "pods", len(pods))
+	return nil
+}
+
+// restoreResizedWorkloads restores all workloads that had their pod requests resized.
+func (r *IdleDetectorReconciler) restoreResizedWorkloads(ctx context.Context, detector *slumlordv1alpha1.SlumlordIdleDetector) error {
+	logger := log.FromContext(ctx)
+
+	var remaining []slumlordv1alpha1.ResizedWorkload
+	var lastErr error
+
+	for _, resized := range detector.Status.ResizedWorkloads {
+		if err := r.restorePodRequests(ctx, detector.Namespace, resized); err != nil {
+			logger.Error(err, "Failed to restore resized workload", "kind", resized.Kind, "name", resized.Name)
+			lastErr = err
+			remaining = append(remaining, resized)
+			continue
+		}
+	}
+
+	detector.Status.ResizedWorkloads = remaining
+
+	if lastErr != nil {
+		return fmt.Errorf("some resized workloads failed to restore: %w", lastErr)
 	}
 	return nil
 }
