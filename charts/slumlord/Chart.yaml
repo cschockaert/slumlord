@@ -2,8 +2,8 @@ apiVersion: v2
 name: slumlord
 description: A Helm chart for Slumlord - Kubernetes operator for cost optimization
 type: application
-version: 2.9.0
-appVersion: "2.9.0"
+version: 2.10.0
+appVersion: "2.10.0"
 keywords:
   - kubernetes
   - operator
