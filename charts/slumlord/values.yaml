@@ -53,6 +53,15 @@ tolerations: []
 
 affinity: {}
 
+# Logging configuration (zap flags)
+log:
+  # Log level: info, debug, or integer (0=info, 1=debug, 2+=trace)
+  level: info
+  # Log encoding: json (production) or console (human-readable)
+  encoder: json
+  # Enable development mode (console encoder, debug level, stacktraces on warnings)
+  development: false
+
 # Leader election configuration
 leaderElection:
   enabled: true

@@ -51,7 +51,7 @@ func main() {
 	flag.BoolVar(&enableNodeDrain, "enable-node-drain", false,
 		"Enable the node drain policy controller.")
 
-	opts := zap.Options{Development: true}
+	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
