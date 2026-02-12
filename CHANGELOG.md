@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-02-12
+
+### Added
+
+- PDB/replica-aware safety for BinPacker consolidation plan
+- Disruption budget checks before pod evictions (respects PDB `DisruptionsAllowed`)
+- Fallback safety: require at least 2 ready replicas when no PDB exists
+- Support for both Deployment and StatefulSet workload resolution
+- Performance considerations note in README
+
 ## [2.8.0] - 2026-02-12
 
 ### Added
@@ -172,7 +182,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.8.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.9.0...HEAD
+[2.9.0]: https://github.com/cschockaert/slumlord/compare/2.8.0...2.9.0
 [2.8.0]: https://github.com/cschockaert/slumlord/compare/2.7.0...2.8.0
 [2.7.0]: https://github.com/cschockaert/slumlord/compare/2.6.0...2.7.0
 [2.6.0]: https://github.com/cschockaert/slumlord/compare/2.5.0...2.6.0
