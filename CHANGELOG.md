@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-02-12
+
+### Added
+
+- `spec.suspend` field on SleepingSchedule to temporarily pause schedule management
+- Automatic wake-up of sleeping workloads when a schedule is suspended
+- `Ready` condition on SleepingSchedule status (Suspended/Active/Sleeping reasons)
+- `Suspended` print column in `kubectl get sleepschedules` output
+
 ## [2.7.0] - 2026-02-11
 
 ### Added
@@ -163,7 +172,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.7.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.8.0...HEAD
+[2.8.0]: https://github.com/cschockaert/slumlord/compare/2.7.0...2.8.0
 [2.7.0]: https://github.com/cschockaert/slumlord/compare/2.6.0...2.7.0
 [2.6.0]: https://github.com/cschockaert/slumlord/compare/2.5.0...2.6.0
 [2.5.0]: https://github.com/cschockaert/slumlord/compare/2.4.0...2.5.0
