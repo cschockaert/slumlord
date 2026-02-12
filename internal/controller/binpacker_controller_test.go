@@ -11,7 +11,6 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -338,17 +337,6 @@ func rsMapForPod(podName, namespace, deployName string) map[string]*appsv1.Repli
 	}
 }
 
-// mergeRSMaps combines multiple rsMap entries.
-func mergeRSMaps(maps ...map[string]*appsv1.ReplicaSet) map[string]*appsv1.ReplicaSet {
-	result := make(map[string]*appsv1.ReplicaSet)
-	for _, m := range maps {
-		for k, v := range m {
-			result[k] = v
-		}
-	}
-	return result
-}
-
 // rsObjectsForPod returns ReplicaSet and Deployment objects for the fake client.
 func rsObjectsForPod(podName, namespace, deployName string, readyReplicas int32, podLabels map[string]string) []client.Object {
 	rsName := podName + "-rs"
@@ -425,8 +413,12 @@ func TestBinPacker_IsEvictable(t *testing.T) {
 	reconciler := &BinPackerReconciler{Scheme: scheme}
 	excludeNS := map[string]bool{"kube-system": true}
 	includeNS := map[string]bool{}
-	// rsMap with RS→Deployment chain for "normal" pod
+	// rsMap with RS→Deployment chains for pods that need to reach specific checks
 	rsMap := rsMapForPod("normal", "default", "deploy-normal")
+	// Add hostpath RS so the hostPath test actually validates the volume check
+	for k, v := range rsMapForPod("hostpath", "default", "deploy-hostpath") {
+		rsMap[k] = v
+	}
 
 	tests := []struct {
 		name     string
@@ -1506,6 +1498,151 @@ func TestBinPacker_Safety_StatefulSet_NoPDB_1Replica_Blocked(t *testing.T) {
 	}
 }
 
+func TestBinPacker_Safety_MultiplePDBs_TakesMostRestrictive(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+
+	nodeLow := makeNode("node-low", "4000m", "8Gi", nil)
+	nodeTarget := makeNode("node-target", "4000m", "8Gi", nil)
+
+	podLabels := map[string]string{"app": "web", "tier": "frontend"}
+	pod := makeRunningPod("web-pod", "default", "node-low", "200m", "256Mi")
+	pod.Labels = podLabels
+
+	podTarget := makeRunningPod("target-pod", "default", "node-target", "2000m", "4Gi")
+
+	rs := makeReplicaSet("web-pod-rs", "default", "web-deploy", podLabels)
+	deploy := makeDeployment("web-deploy", "default", 3, 3, podLabels)
+
+	// Two PDBs matching the same pod: one allows 2, the other allows 0
+	pdbPermissive := makePDB("web-pdb-permissive", "default", map[string]string{"app": "web"}, 2)
+	pdbStrict := makePDB("web-pdb-strict", "default", map[string]string{"tier": "frontend"}, 0)
+
+	targetLabels := map[string]string{"app": "target"}
+	rsTarget := makeReplicaSet("target-pod-rs", "default", "target-deploy", targetLabels)
+	deployTarget := makeDeployment("target-deploy", "default", 1, 1, targetLabels)
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(nodeLow, nodeTarget, pod, podTarget, rs, deploy, pdbPermissive, pdbStrict, rsTarget, deployTarget).
+		Build()
+
+	reconciler := &BinPackerReconciler{Client: fakeClient, Scheme: scheme}
+	packer := makeBinPacker("test", "consolidate", int32Ptr(30), int32Ptr(30))
+
+	infos, rsMap, err := reconciler.analyzeNodes(ctx, packer)
+	if err != nil {
+		t.Fatalf("analyzeNodes() error = %v", err)
+	}
+
+	candidates := reconciler.findCandidateNodes(infos, packer)
+	safety, err := reconciler.buildSafetyContext(ctx, candidates, rsMap)
+	if err != nil {
+		t.Fatalf("buildSafetyContext() error = %v", err)
+	}
+
+	plan := reconciler.buildConsolidationPlan(candidates, infos, packer, safety)
+	if len(plan) != 0 {
+		t.Errorf("Expected 0 evictions (multiple PDBs, most restrictive has disruptionsAllowed=0), got %d", len(plan))
+	}
+}
+
+func TestBinPacker_Safety_WorkloadNotFound_Blocked(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+
+	nodeLow := makeNode("node-low", "4000m", "8Gi", nil)
+	nodeTarget := makeNode("node-target", "4000m", "8Gi", nil)
+
+	podLabels := map[string]string{"app": "ghost"}
+	// Pod owned by RS→Deployment chain, but the Deployment object is missing from the cluster
+	pod := makeRunningPod("ghost-pod", "default", "node-low", "200m", "256Mi")
+	pod.Labels = podLabels
+
+	podTarget := makeRunningPod("target-pod", "default", "node-target", "2000m", "4Gi")
+
+	// RS exists and points to a Deployment, but the Deployment itself is NOT created
+	rs := makeReplicaSet("ghost-pod-rs", "default", "ghost-deploy", podLabels)
+
+	targetLabels := map[string]string{"app": "target"}
+	rsTarget := makeReplicaSet("target-pod-rs", "default", "target-deploy", targetLabels)
+	deployTarget := makeDeployment("target-deploy", "default", 1, 1, targetLabels)
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(nodeLow, nodeTarget, pod, podTarget, rs, rsTarget, deployTarget).
+		Build()
+
+	reconciler := &BinPackerReconciler{Client: fakeClient, Scheme: scheme}
+	packer := makeBinPacker("test", "consolidate", int32Ptr(30), int32Ptr(30))
+
+	infos, rsMap, err := reconciler.analyzeNodes(ctx, packer)
+	if err != nil {
+		t.Fatalf("analyzeNodes() error = %v", err)
+	}
+
+	candidates := reconciler.findCandidateNodes(infos, packer)
+	safety, err := reconciler.buildSafetyContext(ctx, candidates, rsMap)
+	if err != nil {
+		t.Fatalf("buildSafetyContext() error = %v", err)
+	}
+
+	plan := reconciler.buildConsolidationPlan(candidates, infos, packer, safety)
+	if len(plan) != 0 {
+		t.Errorf("Expected 0 evictions (Deployment not found, budget falls to -1), got %d", len(plan))
+	}
+}
+
+func TestBinPacker_Safety_CrossNamespacePDB_DoesNotMatch(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+
+	nodeLow := makeNode("node-low", "4000m", "8Gi", nil)
+	nodeTarget := makeNode("node-target", "4000m", "8Gi", nil)
+
+	podLabels := map[string]string{"app": "web"}
+	pod := makeRunningPod("web-pod", "staging", "node-low", "200m", "256Mi")
+	pod.Labels = podLabels
+
+	podTarget := makeRunningPod("target-pod", "staging", "node-target", "2000m", "4Gi")
+
+	rs := makeReplicaSet("web-pod-rs", "staging", "web-deploy", podLabels)
+	deploy := makeDeployment("web-deploy", "staging", 2, 2, podLabels) // budget = 2-1 = 1 (no PDB match)
+
+	// PDB in a DIFFERENT namespace — should NOT match the staging pod
+	pdbWrongNS := makePDB("web-pdb", "production", podLabels, 0)
+
+	targetLabels := map[string]string{"app": "target"}
+	rsTarget := makeReplicaSet("target-pod-rs", "staging", "target-deploy", targetLabels)
+	deployTarget := makeDeployment("target-deploy", "staging", 1, 1, targetLabels)
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(nodeLow, nodeTarget, pod, podTarget, rs, deploy, pdbWrongNS, rsTarget, deployTarget).
+		Build()
+
+	reconciler := &BinPackerReconciler{Client: fakeClient, Scheme: scheme}
+	packer := makeBinPacker("test", "consolidate", int32Ptr(30), int32Ptr(30))
+
+	infos, rsMap, err := reconciler.analyzeNodes(ctx, packer)
+	if err != nil {
+		t.Fatalf("analyzeNodes() error = %v", err)
+	}
+
+	candidates := reconciler.findCandidateNodes(infos, packer)
+	safety, err := reconciler.buildSafetyContext(ctx, candidates, rsMap)
+	if err != nil {
+		t.Fatalf("buildSafetyContext() error = %v", err)
+	}
+
+	plan := reconciler.buildConsolidationPlan(candidates, infos, packer, safety)
+	// PDB in production namespace should not block eviction of staging pod.
+	// Without PDB match, fallback is readyReplicas-1 = 2-1 = 1, so eviction is allowed.
+	if len(plan) != 1 {
+		t.Errorf("Expected 1 eviction (cross-namespace PDB should not match), got %d", len(plan))
+	}
+}
+
 func TestBinPacker_ResolveWorkload(t *testing.T) {
 	rsMap := map[string]*appsv1.ReplicaSet{
 		"default/my-rs": {
@@ -1600,6 +1737,3 @@ func TestBinPacker_ResolveWorkload(t *testing.T) {
 		})
 	}
 }
-
-// Ensure unused imports don't cause issues
-var _ = runtime.NewScheme
