@@ -6,6 +6,11 @@ import (
 
 // SlumlordSleepScheduleSpec defines the desired state of SlumlordSleepSchedule
 type SlumlordSleepScheduleSpec struct {
+	// Suspend prevents the schedule from running when true.
+	// If workloads are currently sleeping, they will be woken up.
+	// +optional
+	Suspend bool `json:"suspend,omitempty"`
+
 	// Selector specifies which workloads to target
 	Selector WorkloadSelector `json:"selector"`
 
@@ -67,6 +72,10 @@ type SlumlordSleepScheduleStatus struct {
 	// LastTransitionTime is the last time the sleep state changed
 	// +optional
 	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
+
+	// Conditions represent the latest available observations
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // ManagedWorkload tracks a workload managed by this schedule
@@ -92,6 +101,7 @@ type ManagedWorkload struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Suspended",type="boolean",JSONPath=".spec.suspend"
 // +kubebuilder:printcolumn:name="Sleeping",type="boolean",JSONPath=".status.sleeping"
 // +kubebuilder:printcolumn:name="Start",type="string",JSONPath=".spec.schedule.start"
 // +kubebuilder:printcolumn:name="End",type="string",JSONPath=".spec.schedule.end"
