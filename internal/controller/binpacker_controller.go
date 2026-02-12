@@ -11,6 +11,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -50,6 +51,41 @@ type resourcePair struct {
 	mem resource.Quantity
 }
 
+// workloadRef identifies a replicating controller (Deployment or StatefulSet).
+type workloadRef struct {
+	Namespace string
+	Kind      string // "Deployment" or "StatefulSet"
+	Name      string
+}
+
+// safetyContext holds pre-computed disruption budgets for all workloads in candidates.
+type safetyContext struct {
+	podWorkloads     map[string]workloadRef // "ns/podName" → workload
+	disruptionBudget map[workloadRef]int32  // remaining budget per workload
+}
+
+// resolveWorkload returns the replicating controller for a pod, or nil if not backed by one.
+func resolveWorkload(pod *corev1.Pod, rsMap map[string]*appsv1.ReplicaSet) *workloadRef {
+	for _, ref := range pod.OwnerReferences {
+		switch ref.Kind {
+		case "StatefulSet":
+			return &workloadRef{Namespace: pod.Namespace, Kind: "StatefulSet", Name: ref.Name}
+		case "ReplicaSet":
+			rs := rsMap[fmt.Sprintf("%s/%s", pod.Namespace, ref.Name)]
+			if rs == nil {
+				return nil
+			}
+			for _, rsRef := range rs.OwnerReferences {
+				if rsRef.Kind == "Deployment" {
+					return &workloadRef{Namespace: pod.Namespace, Kind: "Deployment", Name: rsRef.Name}
+				}
+			}
+			return nil // bare RS with no Deployment parent
+		}
+	}
+	return nil
+}
+
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordbinpackers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordbinpackers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordbinpackers/finalizers,verbs=update
@@ -58,6 +94,8 @@ type resourcePair struct {
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
 
 // Reconcile handles the reconciliation loop for SlumlordBinPacker
 func (r *BinPackerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -99,7 +137,7 @@ func (r *BinPackerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Analyze nodes
-	nodeInfos, err := r.analyzeNodes(ctx, &packer)
+	nodeInfos, rsMap, err := r.analyzeNodes(ctx, &packer)
 	if err != nil {
 		logger.Error(err, "Failed to analyze nodes")
 		return ctrl.Result{RequeueAfter: 2 * time.Minute}, err
@@ -133,8 +171,15 @@ func (r *BinPackerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
 	}
 
+	// Build safety context (PDB + replica awareness)
+	safety, err := r.buildSafetyContext(ctx, candidates, rsMap)
+	if err != nil {
+		logger.Error(err, "Failed to build safety context")
+		return ctrl.Result{RequeueAfter: 2 * time.Minute}, err
+	}
+
 	// Build consolidation plan
-	plan := r.buildConsolidationPlan(candidates, nodeInfos, &packer)
+	plan := r.buildConsolidationPlan(candidates, nodeInfos, &packer, safety)
 	packer.Status.ConsolidationPlan = plan
 
 	// If dry run, update status with plan but don't evict
@@ -222,17 +267,17 @@ func (r *BinPackerReconciler) isInConsolidationWindow(packer *slumlordv1alpha1.S
 }
 
 // analyzeNodes lists nodes and computes their utilization based on pod requests.
-func (r *BinPackerReconciler) analyzeNodes(ctx context.Context, packer *slumlordv1alpha1.SlumlordBinPacker) ([]nodeInfo, error) {
+func (r *BinPackerReconciler) analyzeNodes(ctx context.Context, packer *slumlordv1alpha1.SlumlordBinPacker) ([]nodeInfo, map[string]*appsv1.ReplicaSet, error) {
 	// List nodes
 	var nodeList corev1.NodeList
 	if err := r.List(ctx, &nodeList); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// List all pods
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Build pod-by-node map
@@ -261,7 +306,7 @@ func (r *BinPackerReconciler) analyzeNodes(ctx context.Context, packer *slumlord
 	// List ReplicaSets for owner resolution
 	var rsList appsv1.ReplicaSetList
 	if err := r.List(ctx, &rsList); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rsMap := make(map[string]*appsv1.ReplicaSet)
 	for i := range rsList.Items {
@@ -339,7 +384,7 @@ func (r *BinPackerReconciler) analyzeNodes(ctx context.Context, packer *slumlord
 		infos = append(infos, info)
 	}
 
-	return infos, nil
+	return infos, rsMap, nil
 }
 
 // isEvictable returns true if a pod can be safely evicted.
@@ -387,6 +432,11 @@ func (r *BinPackerReconciler) isEvictable(
 		}
 	}
 
+	// Skip pods not backed by a replicating controller (Deployment or StatefulSet)
+	if resolveWorkload(pod, rsMap) == nil {
+		return false
+	}
+
 	// Skip pods with hostPath volumes
 	for _, vol := range pod.Spec.Volumes {
 		if vol.HostPath != nil {
@@ -400,6 +450,112 @@ func (r *BinPackerReconciler) isEvictable(
 	}
 
 	return true
+}
+
+// buildSafetyContext computes disruption budgets for all workloads referenced by candidate pods.
+func (r *BinPackerReconciler) buildSafetyContext(ctx context.Context, candidates []nodeInfo, rsMap map[string]*appsv1.ReplicaSet) (*safetyContext, error) {
+	safety := &safetyContext{
+		podWorkloads:     make(map[string]workloadRef),
+		disruptionBudget: make(map[workloadRef]int32),
+	}
+
+	// Collect unique workloads from candidate evictable pods
+	workloads := make(map[workloadRef]bool)
+	for _, c := range candidates {
+		for _, pod := range c.evictablePods {
+			wl := resolveWorkload(&pod, rsMap)
+			if wl == nil {
+				continue
+			}
+			safety.podWorkloads[fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)] = *wl
+			workloads[*wl] = true
+		}
+	}
+
+	if len(workloads) == 0 {
+		return safety, nil
+	}
+
+	// List PDBs
+	var pdbList policyv1.PodDisruptionBudgetList
+	if err := r.List(ctx, &pdbList); err != nil {
+		return nil, err
+	}
+
+	// List Deployments and StatefulSets for replica counts
+	var deployList appsv1.DeploymentList
+	if err := r.List(ctx, &deployList); err != nil {
+		return nil, err
+	}
+	var stsList appsv1.StatefulSetList
+	if err := r.List(ctx, &stsList); err != nil {
+		return nil, err
+	}
+
+	// Build lookup maps
+	deployMap := make(map[workloadRef]*appsv1.Deployment)
+	for i := range deployList.Items {
+		d := &deployList.Items[i]
+		deployMap[workloadRef{Namespace: d.Namespace, Kind: "Deployment", Name: d.Name}] = d
+	}
+	stsMap := make(map[workloadRef]*appsv1.StatefulSet)
+	for i := range stsList.Items {
+		s := &stsList.Items[i]
+		stsMap[workloadRef{Namespace: s.Namespace, Kind: "StatefulSet", Name: s.Name}] = s
+	}
+
+	// For each workload, compute disruption budget
+	for wl := range workloads {
+		// Get pod template labels for PDB matching
+		var podLabels map[string]string
+		var readyReplicas int32
+
+		switch wl.Kind {
+		case "Deployment":
+			d := deployMap[wl]
+			if d != nil {
+				podLabels = d.Spec.Template.Labels
+				readyReplicas = d.Status.ReadyReplicas
+			}
+		case "StatefulSet":
+			s := stsMap[wl]
+			if s != nil {
+				podLabels = s.Spec.Template.Labels
+				readyReplicas = s.Status.ReadyReplicas
+			}
+		}
+
+		// Match PDBs via label selector
+		budget := int32(-1) // -1 means no PDB found yet
+		for i := range pdbList.Items {
+			pdb := &pdbList.Items[i]
+			if pdb.Namespace != wl.Namespace {
+				continue
+			}
+			if pdb.Spec.Selector == nil {
+				continue
+			}
+			sel, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
+			if err != nil {
+				continue
+			}
+			if sel.Matches(labels.Set(podLabels)) {
+				allowed := pdb.Status.DisruptionsAllowed
+				if budget == -1 || allowed < budget {
+					budget = allowed
+				}
+			}
+		}
+
+		if budget >= 0 {
+			safety.disruptionBudget[wl] = budget
+		} else {
+			// No PDB: allow eviction only if at least 2 replicas are ready
+			safety.disruptionBudget[wl] = readyReplicas - 1
+		}
+	}
+
+	return safety, nil
 }
 
 // findCandidateNodes identifies nodes that are below the configured thresholds.
@@ -439,6 +595,7 @@ func (r *BinPackerReconciler) buildConsolidationPlan(
 	candidates []nodeInfo,
 	allNodes []nodeInfo,
 	packer *slumlordv1alpha1.SlumlordBinPacker,
+	safety *safetyContext,
 ) []slumlordv1alpha1.PlannedEviction {
 	var plan []slumlordv1alpha1.PlannedEviction
 
@@ -467,9 +624,22 @@ func (r *BinPackerReconciler) buildConsolidationPlan(
 				return plan
 			}
 
+			// Check disruption budget
+			podKey := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
+			if wl, ok := safety.podWorkloads[podKey]; ok {
+				if safety.disruptionBudget[wl] <= 0 {
+					continue
+				}
+			}
+
 			targetName := r.findTargetNode(pod, targetNodes)
 			if targetName == "" {
 				continue
+			}
+
+			// Decrement budget after planning the eviction
+			if wl, ok := safety.podWorkloads[podKey]; ok {
+				safety.disruptionBudget[wl]--
 			}
 
 			plan = append(plan, slumlordv1alpha1.PlannedEviction{

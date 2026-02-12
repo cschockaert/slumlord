@@ -280,6 +280,10 @@ The idle detector reconciles every 5 minutes for each SlumlordIdleDetector resou
 5. In `scale` mode: scales down workloads idle longer than `idleDuration`, stores original state in `status.scaledWorkloads`
 6. On detector deletion: restores all scaled workloads via finalizer
 
+### Performance considerations
+
+The BinPacker reconciler performs cluster-wide list operations each cycle (Nodes, Pods, ReplicaSets, PDBs, Deployments, StatefulSets). These are served from the controller-runtime informer cache, not direct API server calls. On very large clusters (thousands of Deployments/Pods), consider scoping with `nodeSelector` and `namespaces` to reduce the working set.
+
 ```mermaid
 graph LR
     A[SlumlordSleepSchedule] --> B[Sleep Controller]
