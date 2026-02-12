@@ -91,6 +91,20 @@ make uninstall
 - Must be updated on each release: move items from `[Unreleased]` to a new version section
 - Update comparison links at the bottom of the file
 
+### Logging & Observability
+
+- **Structured JSON logging** by default in production (zap encoder=json)
+- controller-runtime automatically injects structured fields into every log line: `controller`, `controllerGroup`, `controllerKind`, `namespace`, `name`
+- Helm values expose `log.level`, `log.encoder`, `log.development` — mapped to `--zap-log-level`, `--zap-encoder`, `--zap-devel` flags
+- For local development, set `log.development: true` or pass `--zap-devel` to get console encoding with stacktraces
+- Filter logs per controller in Loki/Grafana: `{app="slumlord"} | json | controller="slumlordsleepschedule"`
+
+### Crash Isolation
+
+- controller-runtime v0.23.1 defaults `RecoverPanic` to `true` on all controllers
+- Each controller's reconcile loop runs in its own goroutine with panic recovery — a panic in one controller does not crash the process
+- No explicit `RecoverPanic` setting needed in `SetupWithManager`; the default is sufficient
+
 ### Key Design Decisions
 
 1. **State stored in status**: Original workload state (replicas, suspend) is stored in `status.managedWorkloads` / `status.scaledWorkloads` to survive operator restarts
@@ -98,6 +112,7 @@ make uninstall
 3. **Overnight schedules**: Handles schedules that cross midnight (e.g., 22:00-06:00)
 4. **Per-namespace**: Each SlumlordSleepSchedule/SlumlordIdleDetector operates within its own namespace
 5. **Finalizers**: Both controllers use finalizers to restore workloads on resource deletion
+6. **Single binary, multiple controllers**: All controllers run in one process with feature flags (`--enable-*`). Crash isolation via `RecoverPanic` and structured logging with per-controller fields eliminate the need for separate deployments
 
 ## Release Process
 

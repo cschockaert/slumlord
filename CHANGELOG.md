@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Default logging to production mode (JSON encoder, info level) instead of development mode
+- Helm chart now exposes `log.level`, `log.encoder`, and `log.development` values for zap configuration
+
 ## [2.9.0] - 2026-02-12
 
 ### Added

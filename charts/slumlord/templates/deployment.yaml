@@ -43,6 +43,11 @@ spec:
           args:
             - --health-probe-bind-address=:{{ .Values.health.port }}
             - --metrics-bind-address=:{{ .Values.metrics.port }}
+            - --zap-log-level={{ .Values.log.level }}
+            - --zap-encoder={{ .Values.log.encoder }}
+            {{- if .Values.log.development }}
+            - --zap-devel
+            {{- end }}
             {{- if .Values.leaderElection.enabled }}
             - --leader-elect
             {{- end }}
