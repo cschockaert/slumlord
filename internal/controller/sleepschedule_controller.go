@@ -146,6 +146,24 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Handle suspend
+	if schedule.Spec.Suspend {
+		if schedule.Status.Sleeping {
+			logger.Info("Schedule suspended, waking sleeping workloads")
+			if err := r.wakeWorkloads(ctx, &schedule); err != nil {
+				return ctrl.Result{RequeueAfter: time.Minute}, err
+			}
+			schedule.Status.Sleeping = false
+			ts := metav1.Now()
+			schedule.Status.LastTransitionTime = &ts
+		}
+		r.setScheduleCondition(&schedule, metav1.ConditionFalse, "Suspended", "Schedule is suspended")
+		if err := r.Status().Update(ctx, &schedule); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
+	}
+
 	// Determine if we should be sleeping
 	now := time.Now()
 	shouldSleep := r.shouldBeSleepingAt(&schedule, now)
@@ -220,6 +238,13 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Update managed workloads gauge
 	managedWorkloadsGauge.WithLabelValues(schedule.Namespace, schedule.Name).Set(float64(len(schedule.Status.ManagedWorkloads)))
 
+	// Set Ready condition for active schedule
+	if shouldSleep {
+		r.setScheduleCondition(&schedule, metav1.ConditionTrue, "Sleeping", "Workloads are sleeping")
+	} else {
+		r.setScheduleCondition(&schedule, metav1.ConditionTrue, "Active", "Schedule is active")
+	}
+
 	if statusChanged || daysChanged {
 		schedule.Status.DaysDisplay = daysDisplay
 		if statusChanged {
@@ -227,9 +252,9 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			schedule.Status.Sleeping = shouldSleep
 			schedule.Status.LastTransitionTime = &ts
 		}
-		if err := r.Status().Update(ctx, &schedule); err != nil {
-			return ctrl.Result{}, err
-		}
+	}
+	if err := r.Status().Update(ctx, &schedule); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Smart requeue interval
@@ -1036,6 +1061,20 @@ func daysToDisplay(days []int) string {
 		}
 	}
 	return strings.Join(parts, ",")
+}
+
+// setScheduleCondition sets the Ready condition on a SlumlordSleepSchedule.
+func (r *SleepScheduleReconciler) setScheduleCondition(
+	schedule *slumlordv1alpha1.SlumlordSleepSchedule,
+	status metav1.ConditionStatus, reason, message string,
+) {
+	apimeta.SetStatusCondition(&schedule.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             status,
+		ObservedGeneration: schedule.Generation,
+		Reason:             reason,
+		Message:            message,
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager

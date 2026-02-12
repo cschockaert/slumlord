@@ -2455,3 +2455,298 @@ func TestReconcile_VerifiesWorkloadState(t *testing.T) {
 		t.Errorf("Expected replicas = 3 (corrected), got %d", *updatedDeploy.Spec.Replicas)
 	}
 }
+
+func TestSuspend_WhenAwake(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	replicas := int32(3)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-deploy",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "test", Image: "nginx"}}},
+			},
+		},
+	}
+
+	// Suspended schedule, currently awake
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-schedule",
+			Namespace: namespace,
+		},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Suspend: true,
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Schedule: slumlordv1alpha1.SleepWindow{
+				Start:    "00:00",
+				End:      "23:59",
+				Timezone: "UTC",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deploy, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+
+	result, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	// Should requeue after 1 minute
+	if result.RequeueAfter != 1*time.Minute {
+		t.Errorf("Expected RequeueAfter = 1m, got %v", result.RequeueAfter)
+	}
+
+	// Deployment should NOT be touched (still 3 replicas)
+	var updatedDeploy appsv1.Deployment
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}, &updatedDeploy); err != nil {
+		t.Fatalf("Failed to get deployment: %v", err)
+	}
+	if *updatedDeploy.Spec.Replicas != 3 {
+		t.Errorf("Expected replicas = 3 (untouched), got %d", *updatedDeploy.Spec.Replicas)
+	}
+
+	// Verify condition is set to Suspended
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if len(updatedSchedule.Status.Conditions) != 1 {
+		t.Fatalf("Expected 1 condition, got %d", len(updatedSchedule.Status.Conditions))
+	}
+	cond := updatedSchedule.Status.Conditions[0]
+	if cond.Type != "Ready" {
+		t.Errorf("Expected condition type Ready, got %s", cond.Type)
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("Expected condition status False, got %s", cond.Status)
+	}
+	if cond.Reason != "Suspended" {
+		t.Errorf("Expected condition reason Suspended, got %s", cond.Reason)
+	}
+}
+
+func TestSuspend_WhenSleeping(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// Deployment scaled to 0 (sleeping)
+	zero := int32(0)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-deploy",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &zero,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "test", Image: "nginx"}}},
+			},
+		},
+	}
+
+	originalReplicas := int32(3)
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-schedule",
+			Namespace: namespace,
+		},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Suspend: true,
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Schedule: slumlordv1alpha1.SleepWindow{
+				Start:    "00:00",
+				End:      "23:59",
+				Timezone: "UTC",
+			},
+		},
+		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
+			Sleeping: true,
+			ManagedWorkloads: []slumlordv1alpha1.ManagedWorkload{
+				{Kind: "Deployment", Name: "test-deploy", OriginalReplicas: &originalReplicas},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deploy, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	// Set initial status
+	if err := fakeClient.Status().Update(ctx, schedule); err != nil {
+		t.Fatalf("Failed to set initial status: %v", err)
+	}
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+
+	result, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	if result.RequeueAfter != 1*time.Minute {
+		t.Errorf("Expected RequeueAfter = 1m, got %v", result.RequeueAfter)
+	}
+
+	// Deployment should be woken (restored to 3 replicas)
+	var updatedDeploy appsv1.Deployment
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}, &updatedDeploy); err != nil {
+		t.Fatalf("Failed to get deployment: %v", err)
+	}
+	if *updatedDeploy.Spec.Replicas != 3 {
+		t.Errorf("Expected replicas = 3 (woken), got %d", *updatedDeploy.Spec.Replicas)
+	}
+
+	// Verify status
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if updatedSchedule.Status.Sleeping {
+		t.Error("Expected status.sleeping = false")
+	}
+	if updatedSchedule.Status.LastTransitionTime == nil {
+		t.Error("Expected lastTransitionTime to be set")
+	}
+
+	// Verify condition
+	if len(updatedSchedule.Status.Conditions) != 1 {
+		t.Fatalf("Expected 1 condition, got %d", len(updatedSchedule.Status.Conditions))
+	}
+	cond := updatedSchedule.Status.Conditions[0]
+	if cond.Reason != "Suspended" {
+		t.Errorf("Expected condition reason Suspended, got %s", cond.Reason)
+	}
+}
+
+func TestUnsuspend_ResumesSchedule(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// Deployment with 3 replicas (awake state)
+	replicas := int32(3)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-deploy",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "test", Image: "nginx"}}},
+			},
+		},
+	}
+
+	// Schedule with suspend=false (unsuspended), always-sleeping window, and pre-existing Suspended condition
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-schedule",
+			Namespace: namespace,
+		},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Suspend: false,
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Schedule: slumlordv1alpha1.SleepWindow{
+				Start:    "00:00",
+				End:      "23:59",
+				Timezone: "UTC",
+			},
+		},
+		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:   "Ready",
+					Status: metav1.ConditionFalse,
+					Reason: "Suspended",
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deploy, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	if err := fakeClient.Status().Update(ctx, schedule); err != nil {
+		t.Fatalf("Failed to set initial status: %v", err)
+	}
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	// Should resume normal schedule: deployment should be scaled to 0 (sleep window is active)
+	var updatedDeploy appsv1.Deployment
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}, &updatedDeploy); err != nil {
+		t.Fatalf("Failed to get deployment: %v", err)
+	}
+	if *updatedDeploy.Spec.Replicas != 0 {
+		t.Errorf("Expected replicas = 0 (sleeping after unsuspend), got %d", *updatedDeploy.Spec.Replicas)
+	}
+
+	// Verify condition is now Ready=True
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if !updatedSchedule.Status.Sleeping {
+		t.Error("Expected status.sleeping = true")
+	}
+	if len(updatedSchedule.Status.Conditions) != 1 {
+		t.Fatalf("Expected 1 condition, got %d", len(updatedSchedule.Status.Conditions))
+	}
+	cond := updatedSchedule.Status.Conditions[0]
+	if cond.Status != metav1.ConditionTrue {
+		t.Errorf("Expected condition status True, got %s", cond.Status)
+	}
+	if cond.Reason != "Sleeping" {
+		t.Errorf("Expected condition reason Sleeping, got %s", cond.Reason)
+	}
+}
