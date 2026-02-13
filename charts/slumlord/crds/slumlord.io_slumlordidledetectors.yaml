@@ -56,16 +56,55 @@ spec:
               action:
                 description: |-
                   Action defines what to do when a workload is detected as idle
-                  Valid values: "alert", "scale"
+                  Valid values: "alert", "scale", "resize"
                 enum:
                 - alert
                 - scale
+                - resize
                 type: string
               idleDuration:
                 description: IdleDuration is how long a workload must be idle before
                   action (e.g., "30m", "1h")
                 pattern: ^([0-9]+h)?([0-9]+m)?([0-9]+s)?$
                 type: string
+              resize:
+                description: Resize configures the resize action parameters. Required
+                  when action=resize.
+                properties:
+                  bufferPercent:
+                    default: 25
+                    description: |-
+                      BufferPercent is the percentage of headroom to add above actual usage
+                      when computing target requests. E.g., 25 means target = usage * 1.25
+                    format: int32
+                    maximum: 200
+                    minimum: 0
+                    type: integer
+                  minRequests:
+                    description: |-
+                      MinRequests defines the minimum resource requests floor.
+                      The controller will never resize below these values.
+                    properties:
+                      cpu:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        default: 50m
+                        description: CPU is the minimum CPU request (e.g., "50m",
+                          "100m")
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      memory:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        default: 64Mi
+                        description: Memory is the minimum memory request (e.g., "64Mi",
+                          "128Mi")
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                    type: object
+                type: object
               selector:
                 description: Selector specifies which workloads to monitor
                 properties:
@@ -154,6 +193,56 @@ spec:
                 description: LastCheckTime is the last time idle detection was performed
                 format: date-time
                 type: string
+              resizedWorkloads:
+                description: ResizedWorkloads tracks workloads whose pod requests
+                  were resized in-place
+                items:
+                  description: ResizedWorkload tracks a workload whose pod requests
+                    were resized in-place
+                  properties:
+                    currentRequests:
+                      additionalProperties:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      description: CurrentRequests stores the current (resized) resource
+                        requests
+                      type: object
+                    kind:
+                      description: Kind is the workload kind (Deployment, StatefulSet)
+                      type: string
+                    name:
+                      description: Name is the workload name
+                      type: string
+                    originalRequests:
+                      additionalProperties:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      description: OriginalRequests stores the original resource requests
+                        before resize
+                      type: object
+                    podCount:
+                      description: PodCount is the number of pods that were resized
+                      format: int32
+                      type: integer
+                    resizedAt:
+                      description: ResizedAt is when the workload pods were last resized
+                      format: date-time
+                      type: string
+                  required:
+                  - currentRequests
+                  - kind
+                  - name
+                  - originalRequests
+                  - podCount
+                  - resizedAt
+                  type: object
+                type: array
               scaledWorkloads:
                 description: ScaledWorkloads tracks workloads that have been scaled
                   down due to idleness

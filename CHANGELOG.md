@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `action: resize` mode for SlumlordIdleDetector — right-sizes idle workload pod requests in-place using Kubernetes 1.33 In-Place Pod Resize API
+- `spec.resize` configuration block with `bufferPercent` and `minRequests` (CPU/memory floor)
+- `status.resizedWorkloads` tracking with original/current requests for restore
+- Automatic restore of original requests when workloads are no longer idle or CR is deleted
+- CronJob skip with warning when using resize action (no long-running pods to resize)
+- RBAC permission for pods/patch (in-place resize)
+
 ## [2.10.0] - 2026-02-12
 
 ### Changed
