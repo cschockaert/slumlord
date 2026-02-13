@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-02-12
+
 ### Added
 
 - `action: resize` mode for SlumlordIdleDetector — right-sizes idle workload pod requests in-place using Kubernetes 1.33 In-Place Pod Resize API
@@ -198,7 +200,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.10.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/2.11.0...HEAD
+[2.11.0]: https://github.com/cschockaert/slumlord/compare/2.10.0...2.11.0
 [2.10.0]: https://github.com/cschockaert/slumlord/compare/2.9.0...2.10.0
 [2.9.0]: https://github.com/cschockaert/slumlord/compare/2.8.0...2.9.0
 [2.8.0]: https://github.com/cschockaert/slumlord/compare/2.7.0...2.8.0

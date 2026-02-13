@@ -18,7 +18,7 @@ Kubernetes operator for cost optimization -- automatically scales down workloads
 **Idle Detection** -- detect and optionally scale down underutilized workloads:
 - Monitors CPU and memory usage against configurable thresholds
 - Configurable idle duration before action
-- Two modes: `alert` (report only) or `scale` (auto-scale to zero)
+- Three modes: `alert` (report only), `scale` (auto-scale to zero), or `resize` (in-place pod right-sizing via K8s 1.33)
 - Supports Deployments, StatefulSets, and CronJobs
 - MatchNames wildcard selector (e.g., `prod-*`)
 - Finalizer ensures workloads are restored on detector deletion
@@ -31,7 +31,7 @@ Kubernetes operator for cost optimization -- automatically scales down workloads
 ### Helm (recommended)
 
 ```bash
-helm install slumlord oci://ghcr.io/cschockaert/charts/slumlord --version 2.10.0
+helm install slumlord oci://ghcr.io/cschockaert/charts/slumlord --version 2.11.0
 ```
 
 ### From source
