@@ -678,9 +678,9 @@ func TestIdleDetector_Reconcile_NilMetricsClientReturnsNoIdle(t *testing.T) {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
-	// Should requeue after 5 minutes
-	if result.RequeueAfter.Minutes() != 5 {
-		t.Errorf("Expected requeue after 5m, got %v", result.RequeueAfter)
+	// Should requeue after default interval (5m30s)
+	if result.RequeueAfter != 5*time.Minute+30*time.Second {
+		t.Errorf("Expected requeue after 5m30s, got %v", result.RequeueAfter)
 	}
 
 	// Deployment should NOT be scaled down (nil MetricsClient returns not idle)
@@ -2225,7 +2225,7 @@ func TestIdleDetector_ReconcileInterval(t *testing.T) {
 			name:            "default when nothing configured",
 			specInterval:    nil,
 			defaultInterval: 0,
-			expected:        5 * time.Minute,
+			expected:        5*time.Minute + 30*time.Second,
 		},
 		{
 			name:            "spec overrides everything",

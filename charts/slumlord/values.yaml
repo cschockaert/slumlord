@@ -109,7 +109,8 @@ dashboard:
 
 # Reconciliation intervals override the built-in defaults for each controller.
 # Set to a Go duration string (e.g., "5m", "10m", "30s"). Empty string uses the built-in default.
-# Built-in defaults: sleepSchedule=5m, idleDetector=5m, binPacker=5m, nodeDrain=5m.
+# Built-in defaults are staggered to avoid concurrent reconciliation spikes:
+# sleepSchedule=5m, idleDetector=5m30s, binPacker=6m, nodeDrain=6m30s.
 reconcileIntervals:
   sleepSchedule: ""
   idleDetector: ""

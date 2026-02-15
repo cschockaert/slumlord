@@ -349,9 +349,9 @@ Each controller has a default reconcile interval that can be overridden globally
 | Controller | Default | CLI Flag | Per-resource field |
 |------------|---------|----------|--------------------|
 | SleepSchedule | 5m | `--sleep-reconcile-interval` | `spec.reconcileInterval` |
-| IdleDetector | 5m | `--idle-reconcile-interval` | `spec.reconcileInterval` |
-| BinPacker | 5m | `--binpacker-reconcile-interval` | `spec.reconcileInterval` |
-| NodeDrainPolicy | 5m | `--nodedrain-reconcile-interval` | `spec.reconcileInterval` |
+| IdleDetector | 5m30s | `--idle-reconcile-interval` | `spec.reconcileInterval` |
+| BinPacker | 6m | `--binpacker-reconcile-interval` | `spec.reconcileInterval` |
+| NodeDrainPolicy | 6m30s | `--nodedrain-reconcile-interval` | `spec.reconcileInterval` |
 
 Per-resource overrides take priority over global CLI flags, which take priority over built-in defaults.
 

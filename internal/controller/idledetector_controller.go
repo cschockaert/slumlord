@@ -32,7 +32,7 @@ var supportedIdleDetectorTypes = map[string]bool{
 	"CronJob":     true,
 }
 
-const defaultIdleDetectorInterval = 5 * time.Minute
+const defaultIdleDetectorInterval = 5*time.Minute + 30*time.Second
 
 // IdleDetectorReconciler reconciles a SlumlordIdleDetector object
 type IdleDetectorReconciler struct {

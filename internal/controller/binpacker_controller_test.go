@@ -715,8 +715,8 @@ func TestBinPacker_ReportMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
-	if result.RequeueAfter != 5*time.Minute {
-		t.Errorf("Expected requeue after 5m, got %v", result.RequeueAfter)
+	if result.RequeueAfter != 6*time.Minute {
+		t.Errorf("Expected requeue after 6m, got %v", result.RequeueAfter)
 	}
 
 	var updated slumlordv1alpha1.SlumlordBinPacker
@@ -1751,7 +1751,7 @@ func TestBinPacker_ReconcileInterval(t *testing.T) {
 			name:            "default when nothing configured",
 			specInterval:    nil,
 			defaultInterval: 0,
-			expected:        5 * time.Minute,
+			expected:        6 * time.Minute,
 		},
 		{
 			name:            "spec overrides everything",
