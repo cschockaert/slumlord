@@ -24,11 +24,24 @@ import (
 
 const nodeDrainFinalizer = "slumlord.io/nodedrain-finalizer"
 
+const defaultNodeDrainInterval = 1 * time.Minute
+
 // NodeDrainPolicyReconciler reconciles a SlumlordNodeDrainPolicy object
 type NodeDrainPolicyReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder events.EventRecorder
+	Scheme                   *runtime.Scheme
+	Recorder                 events.EventRecorder
+	DefaultReconcileInterval time.Duration
+}
+
+func (r *NodeDrainPolicyReconciler) reconcileInterval(policy *slumlordv1alpha1.SlumlordNodeDrainPolicy) time.Duration {
+	if policy.Spec.ReconcileInterval != nil {
+		return policy.Spec.ReconcileInterval.Duration
+	}
+	if r.DefaultReconcileInterval > 0 {
+		return r.DefaultReconcileInterval
+	}
+	return defaultNodeDrainInterval
 }
 
 // drainNodeInfo holds computed utilization data for a node during drain analysis
@@ -87,7 +100,7 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if err := r.Status().Update(ctx, &policy); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
+		return ctrl.Result{RequeueAfter: r.reconcileInterval(&policy)}, nil
 	}
 
 	// Parse cron schedule
@@ -98,7 +111,7 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if statusErr := r.Status().Update(ctx, &policy); statusErr != nil {
 			return ctrl.Result{}, statusErr
 		}
-		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
+		return ctrl.Result{RequeueAfter: r.reconcileInterval(&policy)}, nil
 	}
 
 	now := time.Now().In(loc)
@@ -133,7 +146,7 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 		delay := time.Until(nextRun)
 		if delay < 0 {
-			delay = 1 * time.Minute
+			delay = r.reconcileInterval(&policy)
 		}
 		return ctrl.Result{RequeueAfter: delay}, nil
 	}
@@ -154,7 +167,7 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if statusErr := r.Status().Update(ctx, &policy); statusErr != nil {
 			return ctrl.Result{}, statusErr
 		}
-		return ctrl.Result{RequeueAfter: 1 * time.Minute}, err
+		return ctrl.Result{RequeueAfter: r.reconcileInterval(&policy)}, err
 	}
 
 	runStatus.NodesEvaluated = int32(len(nodeInfos))
@@ -332,7 +345,7 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// Requeue for next run
 	delay := time.Until(nextRunAfter)
 	if delay < 0 {
-		delay = 1 * time.Minute
+		delay = r.reconcileInterval(&policy)
 	}
 	return ctrl.Result{RequeueAfter: delay}, nil
 }

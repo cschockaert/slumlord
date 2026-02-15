@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Configurable reconciliation intervals per-resource via `spec.reconcileInterval` on all 4 CRDs
+- Global reconcile interval override via CLI flags: `--sleep-reconcile-interval`, `--idle-reconcile-interval`, `--binpacker-reconcile-interval`, `--nodedrain-reconcile-interval`
+- Helm values for reconciliation interval configuration (`reconcileIntervals.*`)
+- Combined SleepSchedule + IdleDetector example (`config/samples/combined_example.yaml`)
+- Performance Tuning section in documentation
+- In-place resize example for IdleDetector with `reconcileInterval: 10m`
+
+### Changed
+
+- Controllers now accept per-resource reconcile interval (CRD spec) with fallback to global flag, then to built-in default
+
 ## [2.11.0] - 2026-02-12
 
 ### Added

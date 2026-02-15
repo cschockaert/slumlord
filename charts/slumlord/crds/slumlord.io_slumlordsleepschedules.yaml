@@ -59,6 +59,12 @@ spec:
           spec:
             description: SlumlordSleepScheduleSpec defines the desired state of SlumlordSleepSchedule
             properties:
+              reconcileInterval:
+                description: |-
+                  ReconcileInterval overrides the default reconciliation interval.
+                  Controls how often the controller re-checks the schedule state.
+                  Defaults to 5m if not specified.
+                type: string
               schedule:
                 description: Schedule defines when workloads should sleep
                 properties:

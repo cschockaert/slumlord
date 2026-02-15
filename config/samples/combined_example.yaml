@@ -1,0 +1,75 @@
+# Combined example: SleepSchedule + IdleDetector on the same namespace
+#
+# Strategy:
+# 1. During business hours, the IdleDetector monitors and right-sizes idle workloads
+# 2. At night, the SleepSchedule puts everything to sleep
+# 3. FluxCD reconciliation is suspended during sleep to avoid wake conflicts
+#
+# Both resources use the same label selector to target the same workloads.
+---
+# Step 1: Suspend FluxCD during sleep window (start 5 min early to avoid race)
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordSleepSchedule
+metadata:
+  name: nightly-flux-suspend
+  namespace: my-app
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: my-app
+    types:
+      - HelmRelease
+      - Kustomization
+  schedule:
+    start: "21:55"
+    end: "06:05"
+    timezone: "Europe/Paris"
+    days: [1, 2, 3, 4, 5]
+---
+# Step 2: Sleep workloads at night
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordSleepSchedule
+metadata:
+  name: nightly-workload-sleep
+  namespace: my-app
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: my-app
+    types:
+      - Deployment
+      - StatefulSet
+      - CronJob
+  schedule:
+    start: "22:00"
+    end: "06:00"
+    timezone: "Europe/Paris"
+    days: [1, 2, 3, 4, 5]
+  # Check more frequently to catch transitions quickly
+  reconcileInterval: 2m
+---
+# Step 3: During business hours, detect and right-size idle workloads
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordIdleDetector
+metadata:
+  name: daytime-idle-resizer
+  namespace: my-app
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: my-app
+    types:
+      - Deployment
+      - StatefulSet
+  thresholds:
+    cpuPercent: 5
+    memoryPercent: 10
+  idleDuration: "1h"
+  action: resize
+  # Check less frequently to reduce API server load
+  reconcileInterval: 10m
+  resize:
+    bufferPercent: 25
+    minRequests:
+      cpu: "50m"
+      memory: "64Mi"

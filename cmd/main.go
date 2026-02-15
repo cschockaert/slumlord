@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"os"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -37,6 +38,10 @@ func main() {
 	var enableIdleDetector bool
 	var enableBinPacker bool
 	var enableNodeDrain bool
+	var sleepReconcileInterval time.Duration
+	var idleReconcileInterval time.Duration
+	var binpackerReconcileInterval time.Duration
+	var nodedrainReconcileInterval time.Duration
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -50,6 +55,14 @@ func main() {
 		"Enable the bin packer controller for node consolidation.")
 	flag.BoolVar(&enableNodeDrain, "enable-node-drain", false,
 		"Enable the node drain policy controller.")
+	flag.DurationVar(&sleepReconcileInterval, "sleep-reconcile-interval", 0,
+		"Override the default reconcile interval for the sleep schedule controller (e.g., 5m, 10m). 0 uses built-in default.")
+	flag.DurationVar(&idleReconcileInterval, "idle-reconcile-interval", 0,
+		"Override the default reconcile interval for the idle detector controller (e.g., 5m, 10m). 0 uses built-in default.")
+	flag.DurationVar(&binpackerReconcileInterval, "binpacker-reconcile-interval", 0,
+		"Override the default reconcile interval for the bin packer controller (e.g., 2m, 5m). 0 uses built-in default.")
+	flag.DurationVar(&nodedrainReconcileInterval, "nodedrain-reconcile-interval", 0,
+		"Override the default reconcile interval for the node drain policy controller (e.g., 1m, 5m). 0 uses built-in default.")
 
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
@@ -70,9 +83,10 @@ func main() {
 	}
 
 	if err = (&controller.SleepScheduleReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("slumlord-sleep-schedule"),
+		Client:                   mgr.GetClient(),
+		Scheme:                   mgr.GetScheme(),
+		Recorder:                 mgr.GetEventRecorder("slumlord-sleep-schedule"),
+		DefaultReconcileInterval: sleepReconcileInterval,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SlumlordSleepSchedule")
 		os.Exit(1)
@@ -89,9 +103,10 @@ func main() {
 		}
 
 		if err = (&controller.IdleDetectorReconciler{
-			Client:        mgr.GetClient(),
-			Scheme:        mgr.GetScheme(),
-			MetricsClient: mc,
+			Client:                   mgr.GetClient(),
+			Scheme:                   mgr.GetScheme(),
+			MetricsClient:            mc,
+			DefaultReconcileInterval: idleReconcileInterval,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "SlumlordIdleDetector")
 			os.Exit(1)
@@ -102,8 +117,9 @@ func main() {
 
 	if enableBinPacker {
 		if err = (&controller.BinPackerReconciler{
-			Client: mgr.GetClient(),
-			Scheme: mgr.GetScheme(),
+			Client:                   mgr.GetClient(),
+			Scheme:                   mgr.GetScheme(),
+			DefaultReconcileInterval: binpackerReconcileInterval,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "SlumlordBinPacker")
 			os.Exit(1)
@@ -114,9 +130,10 @@ func main() {
 
 	if enableNodeDrain {
 		if err = (&controller.NodeDrainPolicyReconciler{
-			Client:   mgr.GetClient(),
-			Scheme:   mgr.GetScheme(),
-			Recorder: mgr.GetEventRecorder("slumlord-node-drain"),
+			Client:                   mgr.GetClient(),
+			Scheme:                   mgr.GetScheme(),
+			Recorder:                 mgr.GetEventRecorder("slumlord-node-drain"),
+			DefaultReconcileInterval: nodedrainReconcileInterval,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "SlumlordNodeDrainPolicy")
 			os.Exit(1)

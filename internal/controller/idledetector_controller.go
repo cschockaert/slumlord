@@ -32,11 +32,24 @@ var supportedIdleDetectorTypes = map[string]bool{
 	"CronJob":     true,
 }
 
+const defaultIdleDetectorInterval = 5 * time.Minute
+
 // IdleDetectorReconciler reconciles a SlumlordIdleDetector object
 type IdleDetectorReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	MetricsClient metricsclient.Interface // nil = degraded mode (no metrics)
+	Scheme                   *runtime.Scheme
+	MetricsClient            metricsclient.Interface // nil = degraded mode (no metrics)
+	DefaultReconcileInterval time.Duration
+}
+
+func (r *IdleDetectorReconciler) reconcileInterval(detector *slumlordv1alpha1.SlumlordIdleDetector) time.Duration {
+	if detector.Spec.ReconcileInterval != nil {
+		return detector.Spec.ReconcileInterval.Duration
+	}
+	if r.DefaultReconcileInterval > 0 {
+		return r.DefaultReconcileInterval
+	}
+	return defaultIdleDetectorInterval
 }
 
 // +kubebuilder:rbac:groups=slumlord.io,resources=slumlordidledetectors,verbs=get;list;watch;create;update;patch;delete
@@ -119,14 +132,14 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	idleDuration, err := time.ParseDuration(detector.Spec.IdleDuration)
 	if err != nil {
 		logger.Error(err, "Failed to parse idle duration", "idleDuration", detector.Spec.IdleDuration)
-		return ctrl.Result{RequeueAfter: 5 * time.Minute}, err
+		return ctrl.Result{RequeueAfter: r.reconcileInterval(&detector)}, err
 	}
 
 	// Check workloads and detect idle ones
 	idleWorkloads, err := r.detectIdleWorkloads(ctx, &detector, idleDuration)
 	if err != nil {
 		logger.Error(err, "Failed to detect idle workloads")
-		return ctrl.Result{RequeueAfter: 5 * time.Minute}, err
+		return ctrl.Result{RequeueAfter: r.reconcileInterval(&detector)}, err
 	}
 
 	// Update idle workloads in status
@@ -142,7 +155,7 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if statusErr := r.Status().Update(ctx, &detector); statusErr != nil {
 				logger.Error(statusErr, "Failed to persist status after scale error")
 			}
-			return ctrl.Result{RequeueAfter: 5 * time.Minute}, err
+			return ctrl.Result{RequeueAfter: r.reconcileInterval(&detector)}, err
 		}
 	}
 
@@ -152,7 +165,7 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if statusErr := r.Status().Update(ctx, &detector); statusErr != nil {
 				logger.Error(statusErr, "Failed to persist status after resize error")
 			}
-			return ctrl.Result{RequeueAfter: 5 * time.Minute}, err
+			return ctrl.Result{RequeueAfter: r.reconcileInterval(&detector)}, err
 		}
 	}
 
@@ -162,7 +175,7 @@ func (r *IdleDetectorReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Requeue to check again in 5 minutes
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	return ctrl.Result{RequeueAfter: r.reconcileInterval(&detector)}, nil
 }
 
 // matchesSelector checks if a workload name matches the selector's MatchNames patterns

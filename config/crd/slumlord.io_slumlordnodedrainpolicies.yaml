@@ -104,6 +104,12 @@ spec:
                   type: string
                 description: NodeSelector filters which nodes to consider for draining
                 type: object
+              reconcileInterval:
+                description: |-
+                  ReconcileInterval overrides the default reconciliation interval.
+                  Controls how often the controller re-evaluates the policy when not on a cron tick.
+                  Defaults to 1m if not specified.
+                type: string
               safety:
                 description: Safety configures safety constraints
                 properties:

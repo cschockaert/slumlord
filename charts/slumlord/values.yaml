@@ -107,6 +107,15 @@ dashboard:
     #       pathType: Prefix
     tls: []
 
+# Reconciliation intervals override the built-in defaults for each controller.
+# Set to a Go duration string (e.g., "5m", "10m", "30s"). Empty string uses the built-in default.
+# Built-in defaults: sleepSchedule=5m, idleDetector=5m, binPacker=2m, nodeDrain=1m.
+reconcileIntervals:
+  sleepSchedule: ""
+  idleDetector: ""
+  binPacker: ""
+  nodeDrain: ""
+
 # Idle detector feature (experimental, metrics stub)
 idleDetector:
   enabled: false

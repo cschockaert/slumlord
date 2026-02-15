@@ -16,6 +16,12 @@ type SlumlordSleepScheduleSpec struct {
 
 	// Schedule defines when workloads should sleep
 	Schedule SleepWindow `json:"schedule"`
+
+	// ReconcileInterval overrides the default reconciliation interval.
+	// Controls how often the controller re-checks the schedule state.
+	// Defaults to 5m if not specified.
+	// +optional
+	ReconcileInterval *metav1.Duration `json:"reconcileInterval,omitempty"`
 }
 
 // WorkloadSelector defines how to select workloads

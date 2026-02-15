@@ -736,3 +736,50 @@ func TestNodeDrain_IsNodeReady(t *testing.T) {
 		t.Error("Expected node without conditions to not be ready")
 	}
 }
+
+func TestNodeDrainPolicy_ReconcileInterval(t *testing.T) {
+	twoMin := metav1.Duration{Duration: 2 * time.Minute}
+
+	tests := []struct {
+		name            string
+		specInterval    *metav1.Duration
+		defaultInterval time.Duration
+		expected        time.Duration
+	}{
+		{
+			name:            "default when nothing configured",
+			specInterval:    nil,
+			defaultInterval: 0,
+			expected:        1 * time.Minute,
+		},
+		{
+			name:            "spec overrides everything",
+			specInterval:    &twoMin,
+			defaultInterval: 5 * time.Minute,
+			expected:        2 * time.Minute,
+		},
+		{
+			name:            "global default used when no spec",
+			specInterval:    nil,
+			defaultInterval: 30 * time.Second,
+			expected:        30 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &NodeDrainPolicyReconciler{
+				DefaultReconcileInterval: tt.defaultInterval,
+			}
+			policy := &slumlordv1alpha1.SlumlordNodeDrainPolicy{
+				Spec: slumlordv1alpha1.SlumlordNodeDrainPolicySpec{
+					ReconcileInterval: tt.specInterval,
+				},
+			}
+			got := r.reconcileInterval(policy)
+			if got != tt.expected {
+				t.Errorf("reconcileInterval() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
