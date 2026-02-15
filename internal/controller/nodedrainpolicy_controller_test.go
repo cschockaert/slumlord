@@ -474,8 +474,8 @@ func TestNodeDrain_Suspend(t *testing.T) {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
-	if result.RequeueAfter != 1*time.Minute {
-		t.Errorf("Expected requeue after 1m for suspended policy, got %v", result.RequeueAfter)
+	if result.RequeueAfter != 5*time.Minute {
+		t.Errorf("Expected requeue after 5m for suspended policy, got %v", result.RequeueAfter)
 	}
 
 	var updated slumlordv1alpha1.SlumlordNodeDrainPolicy
@@ -750,7 +750,7 @@ func TestNodeDrainPolicy_ReconcileInterval(t *testing.T) {
 			name:            "default when nothing configured",
 			specInterval:    nil,
 			defaultInterval: 0,
-			expected:        1 * time.Minute,
+			expected:        5 * time.Minute,
 		},
 		{
 			name:            "spec overrides everything",

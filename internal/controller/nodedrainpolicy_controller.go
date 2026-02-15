@@ -24,7 +24,7 @@ import (
 
 const nodeDrainFinalizer = "slumlord.io/nodedrain-finalizer"
 
-const defaultNodeDrainInterval = 1 * time.Minute
+const defaultNodeDrainInterval = 5 * time.Minute
 
 // NodeDrainPolicyReconciler reconciles a SlumlordNodeDrainPolicy object
 type NodeDrainPolicyReconciler struct {

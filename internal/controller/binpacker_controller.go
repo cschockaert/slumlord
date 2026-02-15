@@ -25,7 +25,7 @@ const binPackerFinalizer = "slumlord.io/binpacker-finalizer"
 
 var defaultExcludeNamespaces = []string{"kube-system", "kube-public", "kube-node-lease"}
 
-const defaultBinPackerInterval = 2 * time.Minute
+const defaultBinPackerInterval = 5 * time.Minute
 
 // BinPackerReconciler reconciles a SlumlordBinPacker object
 type BinPackerReconciler struct {

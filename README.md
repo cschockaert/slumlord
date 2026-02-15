@@ -350,8 +350,8 @@ Each controller has a default reconcile interval that can be overridden globally
 |------------|---------|----------|--------------------|
 | SleepSchedule | 5m | `--sleep-reconcile-interval` | `spec.reconcileInterval` |
 | IdleDetector | 5m | `--idle-reconcile-interval` | `spec.reconcileInterval` |
-| BinPacker | 2m | `--binpacker-reconcile-interval` | `spec.reconcileInterval` |
-| NodeDrainPolicy | 1m | `--nodedrain-reconcile-interval` | `spec.reconcileInterval` |
+| BinPacker | 5m | `--binpacker-reconcile-interval` | `spec.reconcileInterval` |
+| NodeDrainPolicy | 5m | `--nodedrain-reconcile-interval` | `spec.reconcileInterval` |
 
 Per-resource overrides take priority over global CLI flags, which take priority over built-in defaults.
 
@@ -361,8 +361,8 @@ Per-resource overrides take priority over global CLI flags, which take priority 
 reconcileIntervals:
   sleepSchedule: "10m"   # Reduce API server load in large clusters
   idleDetector: "10m"
-  binPacker: "5m"
-  nodeDrain: "2m"
+  binPacker: "10m"
+  nodeDrain: "10m"
 ```
 
 **Recommendations**:
