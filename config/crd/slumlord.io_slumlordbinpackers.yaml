@@ -94,7 +94,7 @@ spec:
                 description: |-
                   ReconcileInterval overrides the default reconciliation interval.
                   Controls how often the controller analyzes node utilization.
-                  Defaults to 2m if not specified.
+                  Defaults to 6m if not specified.
                 type: string
               schedule:
                 description: Schedule defines an optional time window for consolidation

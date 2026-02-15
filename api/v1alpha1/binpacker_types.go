@@ -42,7 +42,7 @@ type SlumlordBinPackerSpec struct {
 
 	// ReconcileInterval overrides the default reconciliation interval.
 	// Controls how often the controller analyzes node utilization.
-	// Defaults to 2m if not specified.
+	// Defaults to 6m if not specified.
 	// +optional
 	ReconcileInterval *metav1.Duration `json:"reconcileInterval,omitempty"`
 }

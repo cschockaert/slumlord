@@ -31,7 +31,7 @@ type SlumlordNodeDrainPolicySpec struct {
 
 	// ReconcileInterval overrides the default reconciliation interval.
 	// Controls how often the controller re-evaluates the policy when not on a cron tick.
-	// Defaults to 1m if not specified.
+	// Defaults to 6m30s if not specified.
 	// +optional
 	ReconcileInterval *metav1.Duration `json:"reconcileInterval,omitempty"`
 }
