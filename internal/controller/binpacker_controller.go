@@ -25,10 +25,23 @@ const binPackerFinalizer = "slumlord.io/binpacker-finalizer"
 
 var defaultExcludeNamespaces = []string{"kube-system", "kube-public", "kube-node-lease"}
 
+const defaultBinPackerInterval = 6 * time.Minute
+
 // BinPackerReconciler reconciles a SlumlordBinPacker object
 type BinPackerReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme                   *runtime.Scheme
+	DefaultReconcileInterval time.Duration
+}
+
+func (r *BinPackerReconciler) reconcileInterval(packer *slumlordv1alpha1.SlumlordBinPacker) time.Duration {
+	if packer.Spec.ReconcileInterval != nil {
+		return packer.Spec.ReconcileInterval.Duration
+	}
+	if r.DefaultReconcileInterval > 0 {
+		return r.DefaultReconcileInterval
+	}
+	return defaultBinPackerInterval
 }
 
 // nodeInfo holds computed utilization data for a node
@@ -132,7 +145,7 @@ func (r *BinPackerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if packer.Spec.Schedule != nil {
 		if !r.isInConsolidationWindow(&packer, time.Now()) {
 			logger.Info("Outside consolidation window, skipping")
-			return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
+			return ctrl.Result{RequeueAfter: r.reconcileInterval(&packer)}, nil
 		}
 	}
 
@@ -140,7 +153,7 @@ func (r *BinPackerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	nodeInfos, rsMap, err := r.analyzeNodes(ctx, &packer)
 	if err != nil {
 		logger.Error(err, "Failed to analyze nodes")
-		return ctrl.Result{RequeueAfter: 2 * time.Minute}, err
+		return ctrl.Result{RequeueAfter: r.reconcileInterval(&packer)}, err
 	}
 
 	// Identify candidate nodes (below thresholds)
@@ -168,14 +181,14 @@ func (r *BinPackerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if err := r.Status().Update(ctx, &packer); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
+		return ctrl.Result{RequeueAfter: r.reconcileInterval(&packer)}, nil
 	}
 
 	// Build safety context (PDB + replica awareness)
 	safety, err := r.buildSafetyContext(ctx, candidates, rsMap)
 	if err != nil {
 		logger.Error(err, "Failed to build safety context")
-		return ctrl.Result{RequeueAfter: 2 * time.Minute}, err
+		return ctrl.Result{RequeueAfter: r.reconcileInterval(&packer)}, err
 	}
 
 	// Build consolidation plan
@@ -189,7 +202,7 @@ func (r *BinPackerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, err
 		}
 		logger.Info("Dry run mode, plan built but no evictions", "plannedEvictions", len(plan))
-		return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
+		return ctrl.Result{RequeueAfter: r.reconcileInterval(&packer)}, nil
 	}
 
 	// Execute plan
@@ -208,7 +221,7 @@ func (r *BinPackerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
+	return ctrl.Result{RequeueAfter: r.reconcileInterval(&packer)}, nil
 }
 
 // isInConsolidationWindow checks if the current time falls within the consolidation schedule.

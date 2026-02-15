@@ -39,6 +39,12 @@ type SlumlordBinPackerSpec struct {
 	// DryRun simulates consolidation without evicting pods
 	// +optional
 	DryRun bool `json:"dryRun,omitempty"`
+
+	// ReconcileInterval overrides the default reconciliation interval.
+	// Controls how often the controller analyzes node utilization.
+	// Defaults to 6m if not specified.
+	// +optional
+	ReconcileInterval *metav1.Duration `json:"reconcileInterval,omitempty"`
 }
 
 // BinPackerThresholds defines resource usage thresholds for bin packing

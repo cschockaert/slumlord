@@ -90,6 +90,12 @@ spec:
                 description: NodeSelector filters which nodes to consider for bin
                   packing
                 type: object
+              reconcileInterval:
+                description: |-
+                  ReconcileInterval overrides the default reconciliation interval.
+                  Controls how often the controller analyzes node utilization.
+                  Defaults to 6m if not specified.
+                type: string
               schedule:
                 description: Schedule defines an optional time window for consolidation
                 properties:

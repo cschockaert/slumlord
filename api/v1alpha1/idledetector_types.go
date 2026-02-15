@@ -26,6 +26,12 @@ type SlumlordIdleDetectorSpec struct {
 	// Resize configures the resize action parameters. Required when action=resize.
 	// +optional
 	Resize *ResizeConfig `json:"resize,omitempty"`
+
+	// ReconcileInterval overrides the default reconciliation interval.
+	// Controls how often the controller checks for idle workloads.
+	// Defaults to 5m if not specified.
+	// +optional
+	ReconcileInterval *metav1.Duration `json:"reconcileInterval,omitempty"`
 }
 
 // ResizeConfig defines the configuration for the resize action

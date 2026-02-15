@@ -67,6 +67,12 @@ spec:
                   action (e.g., "30m", "1h")
                 pattern: ^([0-9]+h)?([0-9]+m)?([0-9]+s)?$
                 type: string
+              reconcileInterval:
+                description: |-
+                  ReconcileInterval overrides the default reconciliation interval.
+                  Controls how often the controller checks for idle workloads.
+                  Defaults to 5m if not specified.
+                type: string
               resize:
                 description: Resize configures the resize action parameters. Required
                   when action=resize.

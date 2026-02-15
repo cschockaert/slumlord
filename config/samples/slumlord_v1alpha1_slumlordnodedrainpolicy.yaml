@@ -39,6 +39,7 @@ spec:
   safety:
     maxNodesPerRun: 2
     minReadyNodes: 3
+  reconcileInterval: 30s
 ---
 # Suspended example: policy is defined but not active
 apiVersion: slumlord.io/v1alpha1

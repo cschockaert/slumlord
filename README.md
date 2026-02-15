@@ -218,6 +218,35 @@ spec:
   action: scale
 ```
 
+### Idle detection -- in-place resize mode
+
+```yaml
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordIdleDetector
+metadata:
+  name: idle-resizer
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - Deployment
+      - StatefulSet
+  thresholds:
+    cpuPercent: 10
+    memoryPercent: 15
+  idleDuration: "1h"
+  action: resize
+  reconcileInterval: 10m
+  resize:
+    bufferPercent: 30
+    minRequests:
+      cpu: "50m"
+      memory: "64Mi"
+```
+
+> **Note**: The `resize` action requires Kubernetes 1.33+ with InPlacePodVerticalScaling feature gate enabled. It patches pod resource requests in-place without restarting pods.
+
 ## CRD Reference
 
 ### SlumlordSleepSchedule
@@ -231,6 +260,8 @@ spec:
 | `spec.schedule.end` | `string` | Yes | Wake time in `HH:MM` format |
 | `spec.schedule.timezone` | `string` | No | IANA timezone (e.g., `Europe/Paris`). Default: `UTC` |
 | `spec.schedule.days` | `[]int` | No | Days of week (0=Sunday, 6=Saturday). Default: every day |
+| `spec.suspend` | `bool` | No | Pause the schedule. Sleeping workloads are woken up. Default: `false` |
+| `spec.reconcileInterval` | `duration` | No | Override reconcile interval (e.g., `2m`, `10m`). Default: `5m` |
 
 ### SlumlordIdleDetector
 
@@ -242,7 +273,11 @@ spec:
 | `spec.thresholds.cpuPercent` | `int32` | No | CPU usage % threshold (0-100). Below = idle |
 | `spec.thresholds.memoryPercent` | `int32` | No | Memory usage % threshold (0-100). Below = idle |
 | `spec.idleDuration` | `string` | Yes | How long a workload must be idle before action (e.g., `30m`, `1h`) |
-| `spec.action` | `string` | Yes | `alert` (report only) or `scale` (auto-scale to zero) |
+| `spec.action` | `string` | Yes | `alert` (report only), `scale` (auto-scale to zero), or `resize` (in-place right-sizing) |
+| `spec.reconcileInterval` | `duration` | No | Override reconcile interval (e.g., `5m`, `10m`). Default: `5m` |
+| `spec.resize.bufferPercent` | `int32` | No | Headroom % above actual usage for resize. Default: `25` |
+| `spec.resize.minRequests.cpu` | `quantity` | No | Minimum CPU request floor. Default: `50m` |
+| `spec.resize.minRequests.memory` | `quantity` | No | Minimum memory request floor. Default: `64Mi` |
 
 ### Status
 
@@ -262,7 +297,7 @@ default     idle-alert    alert    1h              2026-02-08T12:00:00Z  1d
 
 ### Sleep Schedules
 
-The operator runs a reconciliation loop every minute for each SlumlordSleepSchedule resource:
+The operator runs a reconciliation loop (default: every 5 minutes, configurable) for each SlumlordSleepSchedule resource:
 
 1. Checks if the current time (in the configured timezone) falls within the sleep window
 2. On **sleep**: scales Deployments/StatefulSets to 0, scales Prometheus Operator CRDs (ThanosRuler, Alertmanager, Prometheus) to 0, suspends CronJobs, hibernates CNPG clusters, suspends FluxCD HelmReleases/Kustomizations, and suspends MariaDB Operator CRDs (MariaDB, MaxScale)
@@ -271,7 +306,7 @@ The operator runs a reconciliation loop every minute for each SlumlordSleepSched
 
 ### Idle Detection
 
-The idle detector reconciles every 5 minutes for each SlumlordIdleDetector resource:
+The idle detector reconciles periodically (default: every 5 minutes, configurable) for each SlumlordIdleDetector resource:
 
 1. Lists workloads matching the selector (labels and/or name patterns)
 2. Checks resource usage against configured thresholds
@@ -304,6 +339,37 @@ graph LR
     J --> D
     J --> E
 ```
+
+## Performance Tuning
+
+### Reconciliation intervals
+
+Each controller has a default reconcile interval that can be overridden globally via CLI flags or per-resource via `spec.reconcileInterval`:
+
+| Controller | Default | CLI Flag | Per-resource field |
+|------------|---------|----------|--------------------|
+| SleepSchedule | 5m | `--sleep-reconcile-interval` | `spec.reconcileInterval` |
+| IdleDetector | 5m30s | `--idle-reconcile-interval` | `spec.reconcileInterval` |
+| BinPacker | 6m | `--binpacker-reconcile-interval` | `spec.reconcileInterval` |
+| NodeDrainPolicy | 6m30s | `--nodedrain-reconcile-interval` | `spec.reconcileInterval` |
+
+Per-resource overrides take priority over global CLI flags, which take priority over built-in defaults.
+
+**Helm values**:
+
+```yaml
+reconcileIntervals:
+  sleepSchedule: "10m"   # Reduce API server load in large clusters
+  idleDetector: "10m"
+  binPacker: "10m"
+  nodeDrain: "10m"
+```
+
+**Recommendations**:
+- **Dev/staging**: use longer intervals (10m+) to reduce load
+- **Production**: use shorter intervals (2-5m) for faster response
+- **Large clusters**: combine longer intervals with scoped selectors (`nodeSelector`, `namespaces`)
+- Short intervals (< 1m) increase API server pressure with minimal benefit
 
 ## Uninstallation
 

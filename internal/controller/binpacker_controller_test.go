@@ -715,8 +715,8 @@ func TestBinPacker_ReportMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
-	if result.RequeueAfter != 2*time.Minute {
-		t.Errorf("Expected requeue after 2m, got %v", result.RequeueAfter)
+	if result.RequeueAfter != 6*time.Minute {
+		t.Errorf("Expected requeue after 6m, got %v", result.RequeueAfter)
 	}
 
 	var updated slumlordv1alpha1.SlumlordBinPacker
@@ -1733,6 +1733,53 @@ func TestBinPacker_ResolveWorkload(t *testing.T) {
 				if *got != *tt.expect {
 					t.Errorf("resolveWorkload() = %v, want %v", *got, *tt.expect)
 				}
+			}
+		})
+	}
+}
+
+func TestBinPacker_ReconcileInterval(t *testing.T) {
+	fiveMin := metav1.Duration{Duration: 5 * time.Minute}
+
+	tests := []struct {
+		name            string
+		specInterval    *metav1.Duration
+		defaultInterval time.Duration
+		expected        time.Duration
+	}{
+		{
+			name:            "default when nothing configured",
+			specInterval:    nil,
+			defaultInterval: 0,
+			expected:        6 * time.Minute,
+		},
+		{
+			name:            "spec overrides everything",
+			specInterval:    &fiveMin,
+			defaultInterval: 3 * time.Minute,
+			expected:        5 * time.Minute,
+		},
+		{
+			name:            "global default used when no spec",
+			specInterval:    nil,
+			defaultInterval: 10 * time.Minute,
+			expected:        10 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &BinPackerReconciler{
+				DefaultReconcileInterval: tt.defaultInterval,
+			}
+			packer := &slumlordv1alpha1.SlumlordBinPacker{
+				Spec: slumlordv1alpha1.SlumlordBinPackerSpec{
+					ReconcileInterval: tt.specInterval,
+				},
+			}
+			got := r.reconcileInterval(packer)
+			if got != tt.expected {
+				t.Errorf("reconcileInterval() = %v, want %v", got, tt.expected)
 			}
 		})
 	}

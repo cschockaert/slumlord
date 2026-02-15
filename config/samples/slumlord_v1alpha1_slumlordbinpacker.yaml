@@ -35,6 +35,7 @@ spec:
     end: "06:00"
     timezone: "Europe/Paris"
     days: [1, 2, 3, 4, 5]  # weekdays only
+  reconcileInterval: 5m
 ---
 # Dry-run example: build consolidation plan without evicting
 apiVersion: slumlord.io/v1alpha1

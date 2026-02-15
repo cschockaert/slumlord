@@ -474,8 +474,8 @@ func TestNodeDrain_Suspend(t *testing.T) {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
-	if result.RequeueAfter != 1*time.Minute {
-		t.Errorf("Expected requeue after 1m for suspended policy, got %v", result.RequeueAfter)
+	if result.RequeueAfter != 6*time.Minute+30*time.Second {
+		t.Errorf("Expected requeue after 6m30s for suspended policy, got %v", result.RequeueAfter)
 	}
 
 	var updated slumlordv1alpha1.SlumlordNodeDrainPolicy
@@ -734,5 +734,52 @@ func TestNodeDrain_IsNodeReady(t *testing.T) {
 	noConditionNode := &corev1.Node{}
 	if isNodeReady(noConditionNode) {
 		t.Error("Expected node without conditions to not be ready")
+	}
+}
+
+func TestNodeDrainPolicy_ReconcileInterval(t *testing.T) {
+	twoMin := metav1.Duration{Duration: 2 * time.Minute}
+
+	tests := []struct {
+		name            string
+		specInterval    *metav1.Duration
+		defaultInterval time.Duration
+		expected        time.Duration
+	}{
+		{
+			name:            "default when nothing configured",
+			specInterval:    nil,
+			defaultInterval: 0,
+			expected:        6*time.Minute + 30*time.Second,
+		},
+		{
+			name:            "spec overrides everything",
+			specInterval:    &twoMin,
+			defaultInterval: 5 * time.Minute,
+			expected:        2 * time.Minute,
+		},
+		{
+			name:            "global default used when no spec",
+			specInterval:    nil,
+			defaultInterval: 30 * time.Second,
+			expected:        30 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &NodeDrainPolicyReconciler{
+				DefaultReconcileInterval: tt.defaultInterval,
+			}
+			policy := &slumlordv1alpha1.SlumlordNodeDrainPolicy{
+				Spec: slumlordv1alpha1.SlumlordNodeDrainPolicySpec{
+					ReconcileInterval: tt.specInterval,
+				},
+			}
+			got := r.reconcileInterval(policy)
+			if got != tt.expected {
+				t.Errorf("reconcileInterval() = %v, want %v", got, tt.expected)
+			}
+		})
 	}
 }

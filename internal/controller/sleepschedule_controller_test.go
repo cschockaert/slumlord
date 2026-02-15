@@ -2750,3 +2750,70 @@ func TestUnsuspend_ResumesSchedule(t *testing.T) {
 		t.Errorf("Expected condition reason Sleeping, got %s", cond.Reason)
 	}
 }
+
+func TestSleepSchedule_ComputeRequeueInterval(t *testing.T) {
+	tenMin := metav1.Duration{Duration: 10 * time.Minute}
+	threeMin := metav1.Duration{Duration: 3 * time.Minute}
+
+	// Use a time far from any transition so we hit the fallback chain
+	now := time.Date(2026, 2, 15, 12, 0, 0, 0, time.UTC)
+
+	// Schedule sleeps 22:00-06:00 — at noon we're ~10h away from next transition
+	makeSchedule := func(interval *metav1.Duration) *slumlordv1alpha1.SlumlordSleepSchedule {
+		return &slumlordv1alpha1.SlumlordSleepSchedule{
+			Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+				Schedule: slumlordv1alpha1.SleepWindow{
+					Start:    "22:00",
+					End:      "06:00",
+					Timezone: "UTC",
+				},
+				ReconcileInterval: interval,
+			},
+		}
+	}
+
+	tests := []struct {
+		name            string
+		specInterval    *metav1.Duration
+		defaultInterval time.Duration
+		expected        time.Duration
+	}{
+		{
+			name:            "built-in default when nothing configured",
+			specInterval:    nil,
+			defaultInterval: 0,
+			expected:        idleRequeueInterval, // 5m
+		},
+		{
+			name:            "spec overrides everything",
+			specInterval:    &tenMin,
+			defaultInterval: 3 * time.Minute,
+			expected:        10 * time.Minute,
+		},
+		{
+			name:            "global default used when no spec",
+			specInterval:    nil,
+			defaultInterval: 3 * time.Minute,
+			expected:        3 * time.Minute,
+		},
+		{
+			name:            "spec takes priority over global",
+			specInterval:    &threeMin,
+			defaultInterval: 10 * time.Minute,
+			expected:        3 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &SleepScheduleReconciler{
+				DefaultReconcileInterval: tt.defaultInterval,
+			}
+			schedule := makeSchedule(tt.specInterval)
+			got := r.computeRequeueInterval(schedule, now)
+			if got != tt.expected {
+				t.Errorf("computeRequeueInterval() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}

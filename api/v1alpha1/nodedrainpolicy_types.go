@@ -28,6 +28,12 @@ type SlumlordNodeDrainPolicySpec struct {
 	// Suspend prevents the policy from running when true
 	// +optional
 	Suspend bool `json:"suspend,omitempty"`
+
+	// ReconcileInterval overrides the default reconciliation interval.
+	// Controls how often the controller re-evaluates the policy when not on a cron tick.
+	// Defaults to 6m30s if not specified.
+	// +optional
+	ReconcileInterval *metav1.Duration `json:"reconcileInterval,omitempty"`
 }
 
 // DrainThresholds defines resource usage thresholds for drain candidate detection.

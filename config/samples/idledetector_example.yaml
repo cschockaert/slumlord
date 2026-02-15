@@ -34,3 +34,29 @@ spec:
     memoryPercent: 5
   idleDuration: "30m"
   action: scale
+---
+# Example: Right-size idle workloads in-place (requires Kubernetes 1.33+)
+# Checks every 10 minutes and resizes pods with 30% headroom above actual usage
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordIdleDetector
+metadata:
+  name: idle-resizer
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - Deployment
+      - StatefulSet
+  thresholds:
+    cpuPercent: 10
+    memoryPercent: 15
+  idleDuration: "1h"
+  action: resize
+  reconcileInterval: 10m
+  resize:
+    bufferPercent: 30
+    minRequests:
+      cpu: "50m"
+      memory: "64Mi"

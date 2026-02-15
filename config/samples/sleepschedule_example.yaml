@@ -21,6 +21,8 @@ spec:
     timezone: "Europe/Paris"
     # Only on weekdays (Monday-Friday)
     days: [1, 2, 3, 4, 5]
+  # Override reconciliation frequency (default: 5m)
+  reconcileInterval: 3m
 ---
 # Example: Suspend only CronJobs during weekends
 apiVersion: slumlord.io/v1alpha1

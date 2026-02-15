@@ -60,6 +60,18 @@ spec:
             {{- if .Values.nodeDrain.enabled }}
             - --enable-node-drain
             {{- end }}
+            {{- with .Values.reconcileIntervals.sleepSchedule }}
+            - --sleep-reconcile-interval={{ . }}
+            {{- end }}
+            {{- with .Values.reconcileIntervals.idleDetector }}
+            - --idle-reconcile-interval={{ . }}
+            {{- end }}
+            {{- with .Values.reconcileIntervals.binPacker }}
+            - --binpacker-reconcile-interval={{ . }}
+            {{- end }}
+            {{- with .Values.reconcileIntervals.nodeDrain }}
+            - --nodedrain-reconcile-interval={{ . }}
+            {{- end }}
             {{- if .Values.dashboard.enabled }}
             - --dashboard-bind-address=:{{ .Values.dashboard.port }}
             {{- else }}

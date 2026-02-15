@@ -28,8 +28,9 @@ import (
 // SleepScheduleReconciler reconciles a SlumlordSleepSchedule object
 type SleepScheduleReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder events.EventRecorder
+	Scheme                   *runtime.Scheme
+	Recorder                 events.EventRecorder
+	DefaultReconcileInterval time.Duration
 }
 
 var cnpgClusterGVK = schema.GroupVersionKind{
@@ -529,6 +530,12 @@ func (r *SleepScheduleReconciler) computeRequeueInterval(schedule *slumlordv1alp
 		return approachingRequeueInterval
 	}
 
+	if schedule.Spec.ReconcileInterval != nil {
+		return schedule.Spec.ReconcileInterval.Duration
+	}
+	if r.DefaultReconcileInterval > 0 {
+		return r.DefaultReconcileInterval
+	}
 	return idleRequeueInterval
 }
 
