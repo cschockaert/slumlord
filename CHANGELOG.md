@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-02-15
+
 ### Added
 
 - Configurable reconciliation intervals per-resource via `spec.reconcileInterval` on all 4 CRDs
@@ -19,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Controllers now accept per-resource reconcile interval (CRD spec) with fallback to global flag, then to built-in default
+- Default reconciliation intervals are now staggered to avoid concurrent API server spikes: SleepSchedule=5m, IdleDetector=5m30s, BinPacker=6m, NodeDrainPolicy=6m30s
 
 ## [2.11.0] - 2026-02-12
 
