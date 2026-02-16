@@ -85,8 +85,8 @@ make uninstall
 
 ### Helm Chart (charts/slumlord/)
 
-- `version` and `appVersion` in `Chart.yaml` must always match the latest release tag
-- No `v` prefix (plain semver: `2.0.1`, not `v2.0.1`)
+- `version` and `appVersion` in `Chart.yaml` must always match the latest release tag (plain semver, no `v` prefix)
+- Tags use standard `v` prefix (e.g., `v2.12.0`), but Docker images and Helm chart versions use plain semver (e.g., `2.12.0`)
 
 ### Changelog (CHANGELOG.md)
 
@@ -125,11 +125,11 @@ To create a new release:
 2. **Update Helm chart version**: Set `version` and `appVersion` in `charts/slumlord/Chart.yaml` to the new version
 3. **Update README install command**: Update the `--version` in the Helm install example
 4. **Commit**: Commit changes on a branch, create PR, merge to main
-5. **Tag**: Create a tag on main (no `v` prefix, plain semver: `2.1.0`)
+5. **Tag**: Create a tag on main with `v` prefix
 
 ```bash
-git tag 2.1.0
-git push origin 2.1.0
+git tag v2.13.0
+git push origin v2.13.0
 ```
 
 6. **CI does the rest**: The release workflow (`.github/workflows/release.yaml`) triggers on tag push and:
@@ -139,4 +139,4 @@ git push origin 2.1.0
    - Packages and pushes Helm chart to `oci://ghcr.io/cschockaert/charts/slumlord`
    - Creates a GitHub Release with auto-generated notes
 
-**Important**: No `v` prefix on tags, docker images, or chart versions (plain semver: `2.0.1`, not `v2.0.1`).
+**Important**: Tags use `v` prefix (e.g., `v2.13.0`). Docker images and Helm chart versions use plain semver (the `v` is stripped by CI).
