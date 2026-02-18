@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.1] - 2026-02-18
+
+### Changed
+
+- Release workflow now triggers on `vX.Y.Z` tags (CI strips `v` for Docker/Helm versions)
+- Bump golang Docker image from 1.25-alpine to 1.26-alpine
+- Bump k8s.io/api, k8s.io/apimachinery, k8s.io/metrics from 0.35.0 to 0.35.1
+
 ## [2.12.0] - 2026-02-15
 
 ### Added
@@ -216,7 +224,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.12.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.12.1...HEAD
+[2.12.1]: https://github.com/cschockaert/slumlord/compare/v2.12.0...v2.12.1
 [2.12.0]: https://github.com/cschockaert/slumlord/compare/v2.11.0...v2.12.0
 [2.11.0]: https://github.com/cschockaert/slumlord/compare/v2.10.0...v2.11.0
 [2.10.0]: https://github.com/cschockaert/slumlord/compare/v2.9.0...v2.10.0
