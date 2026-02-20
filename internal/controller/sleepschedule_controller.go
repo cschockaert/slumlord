@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strings"
 	"time"
@@ -83,6 +84,18 @@ var mariadbMaxScaleGVK = schema.GroupVersionKind{
 	Kind:    "MaxScale",
 }
 
+var eckElasticsearchGVK = schema.GroupVersionKind{
+	Group:   "elasticsearch.k8s.elastic.co",
+	Version: "v1",
+	Kind:    "Elasticsearch",
+}
+
+var eckKibanaGVK = schema.GroupVersionKind{
+	Group:   "kibana.k8s.elastic.co",
+	Version: "v1",
+	Kind:    "Kibana",
+}
+
 // Prometheus metrics
 var (
 	reconcileActionsTotal = prometheus.NewCounterVec(
@@ -133,6 +146,8 @@ const (
 // +kubebuilder:rbac:groups=kustomize.toolkit.fluxcd.io,resources=kustomizations,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=thanosrulers;alertmanagers;prometheuses,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=k8s.mariadb.com,resources=mariadbs;maxscales,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=elasticsearch.k8s.elastic.co,resources=elasticsearches,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=kibana.k8s.elastic.co,resources=kibanas,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile handles the reconciliation loop for SlumlordSleepSchedule
@@ -506,6 +521,90 @@ func (r *SleepScheduleReconciler) verifyAndCorrectWorkloads(ctx context.Context,
 		}
 	}
 
+	// Check count-based CRDs (ECK Kibana)
+	for _, check := range []struct {
+		kind string
+		gvk  schema.GroupVersionKind
+	}{
+		{"Kibana", eckKibanaGVK},
+	} {
+		if !r.shouldManageType(schedule, check.kind) {
+			continue
+		}
+		resourceList := &unstructured.UnstructuredList{}
+		resourceList.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: check.gvk.Group, Version: check.gvk.Version, Kind: check.gvk.Kind + "List",
+		})
+		if err := r.List(ctx, resourceList, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
+			if apimeta.IsNoMatchError(err) {
+				continue
+			}
+			return false, err
+		}
+		for i := range resourceList.Items {
+			res := &resourceList.Items[i]
+			if mw, ok := managedSet[workloadKey{check.kind, res.GetName()}]; ok {
+				spec, _ := res.Object["spec"].(map[string]interface{})
+				if spec != nil {
+					var currentCount int64
+					switch v := spec["count"].(type) {
+					case int64:
+						currentCount = v
+					case float64:
+						currentCount = int64(v)
+					}
+					if currentCount == 0 && mw.OriginalReplicas != nil && *mw.OriginalReplicas > 0 {
+						logger.Info("Resource desynced (still at 0 count)", "kind", check.kind, "name", res.GetName())
+						desynced = true
+					}
+				}
+			}
+		}
+	}
+
+	// Check ECK Elasticsearch
+	if r.shouldManageType(schedule, "Elasticsearch") {
+		resourceList := &unstructured.UnstructuredList{}
+		resourceList.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: eckElasticsearchGVK.Group, Version: eckElasticsearchGVK.Version, Kind: "ElasticsearchList",
+		})
+		if err := r.List(ctx, resourceList, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
+			if !apimeta.IsNoMatchError(err) {
+				return false, err
+			}
+		} else {
+			for i := range resourceList.Items {
+				res := &resourceList.Items[i]
+				if mw, ok := managedSet[workloadKey{"Elasticsearch", res.GetName()}]; ok {
+					if mw.OriginalNodeSetCounts != nil {
+						spec, _ := res.Object["spec"].(map[string]interface{})
+						if spec != nil {
+							nodeSets, _ := spec["nodeSets"].([]interface{})
+							for _, ns := range nodeSets {
+								nsMap, _ := ns.(map[string]interface{})
+								if nsMap == nil {
+									continue
+								}
+								var count int64
+								switch v := nsMap["count"].(type) {
+								case int64:
+									count = v
+								case float64:
+									count = int64(v)
+								}
+								if count == 0 {
+									logger.Info("Elasticsearch desynced (nodeSet still at 0)", "name", res.GetName())
+									desynced = true
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	if desynced {
 		logger.Info("Re-running wake to correct desynced workloads", "schedule", schedule.Name)
 		if err := r.wakeWorkloads(ctx, schedule); err != nil {
@@ -730,6 +829,20 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 		}
 	}
 
+	// Handle ECK Kibana (uses spec.count)
+	if r.shouldManageType(schedule, "Kibana") {
+		if err := r.sleepCountResources(ctx, schedule, eckKibanaGVK, "Kibana"); err != nil {
+			return err
+		}
+	}
+
+	// Handle ECK Elasticsearch (uses spec.nodeSets[].count)
+	if r.shouldManageType(schedule, "Elasticsearch") {
+		if err := r.sleepElasticsearchResources(ctx, schedule); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -818,6 +931,16 @@ func (r *SleepScheduleReconciler) wakeWorkloads(ctx context.Context, schedule *s
 			}
 		case "Prometheus":
 			if err := r.wakeReplicaResource(ctx, schedule, managed, promPrometheusGVK); err != nil {
+				return err
+			}
+
+		case "Kibana":
+			if err := r.wakeCountResource(ctx, schedule, managed, eckKibanaGVK); err != nil {
+				return err
+			}
+
+		case "Elasticsearch":
+			if err := r.wakeElasticsearchResource(ctx, schedule, managed); err != nil {
 				return err
 			}
 		}
@@ -1082,6 +1205,220 @@ func (r *SleepScheduleReconciler) setScheduleCondition(
 		Reason:             reason,
 		Message:            message,
 	})
+}
+
+// sleepCountResources scales down CRDs that use spec.count (e.g., ECK Kibana)
+func (r *SleepScheduleReconciler) sleepCountResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, gvk schema.GroupVersionKind, kind string) error {
+	logger := log.FromContext(ctx)
+
+	resourceList := &unstructured.UnstructuredList{}
+	resourceList.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   gvk.Group,
+		Version: gvk.Version,
+		Kind:    gvk.Kind + "List",
+	})
+
+	if err := r.List(ctx, resourceList, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			logger.Info("CRD not installed, skipping", "kind", kind)
+			return nil
+		}
+		return err
+	}
+
+	for i := range resourceList.Items {
+		resource := &resourceList.Items[i]
+		spec, _ := resource.Object["spec"].(map[string]interface{})
+		if spec == nil {
+			continue
+		}
+
+		var currentCount int32
+		switch v := spec["count"].(type) {
+		case int64:
+			currentCount = int32(v)
+		case float64:
+			currentCount = int32(v)
+		default:
+			continue
+		}
+
+		if currentCount > 0 {
+			original := currentCount
+			schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
+				Kind:             kind,
+				Name:             resource.GetName(),
+				OriginalReplicas: &original,
+			})
+
+			spec["count"] = int64(0)
+			if err := r.Update(ctx, resource); err != nil {
+				return err
+			}
+			logger.Info("Scaled down resource", "kind", kind, "name", resource.GetName(), "originalCount", original)
+		}
+	}
+
+	return nil
+}
+
+// wakeCountResource restores spec.count on a CRD resource
+func (r *SleepScheduleReconciler) wakeCountResource(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, managed slumlordv1alpha1.ManagedWorkload, gvk schema.GroupVersionKind) error {
+	logger := log.FromContext(ctx)
+
+	resource := &unstructured.Unstructured{}
+	resource.SetGroupVersionKind(gvk)
+	if err := r.Get(ctx, client.ObjectKey{Namespace: schedule.Namespace, Name: managed.Name}, resource); err != nil {
+		logger.Error(err, "Failed to get resource", "kind", managed.Kind, "name", managed.Name)
+		return nil
+	}
+
+	if managed.OriginalReplicas != nil {
+		spec, _ := resource.Object["spec"].(map[string]interface{})
+		if spec == nil {
+			spec = make(map[string]interface{})
+			resource.Object["spec"] = spec
+		}
+		spec["count"] = int64(*managed.OriginalReplicas)
+		if err := r.Update(ctx, resource); err != nil {
+			return err
+		}
+		logger.Info("Scaled up resource", "kind", managed.Kind, "name", managed.Name, "count", *managed.OriginalReplicas)
+	}
+
+	return nil
+}
+
+// sleepElasticsearchResources scales down ECK Elasticsearch nodeSets to 0
+func (r *SleepScheduleReconciler) sleepElasticsearchResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule) error {
+	logger := log.FromContext(ctx)
+
+	resourceList := &unstructured.UnstructuredList{}
+	resourceList.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   eckElasticsearchGVK.Group,
+		Version: eckElasticsearchGVK.Version,
+		Kind:    "ElasticsearchList",
+	})
+
+	if err := r.List(ctx, resourceList, client.InNamespace(schedule.Namespace), client.MatchingLabels(schedule.Spec.Selector.MatchLabels)); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			logger.Info("ECK Elasticsearch CRD not installed, skipping")
+			return nil
+		}
+		return err
+	}
+
+	for i := range resourceList.Items {
+		resource := &resourceList.Items[i]
+		spec, _ := resource.Object["spec"].(map[string]interface{})
+		if spec == nil {
+			continue
+		}
+
+		nodeSets, _ := spec["nodeSets"].([]interface{})
+		if len(nodeSets) == 0 {
+			continue
+		}
+
+		// Capture original counts
+		originalCounts := make(map[string]int32, len(nodeSets))
+		hasPositiveCount := false
+		for _, ns := range nodeSets {
+			nsMap, _ := ns.(map[string]interface{})
+			if nsMap == nil {
+				continue
+			}
+			name, _ := nsMap["name"].(string)
+			var count int32
+			switch v := nsMap["count"].(type) {
+			case int64:
+				count = int32(v)
+			case float64:
+				count = int32(v)
+			}
+			originalCounts[name] = count
+			if count > 0 {
+				hasPositiveCount = true
+			}
+		}
+
+		if !hasPositiveCount {
+			continue
+		}
+
+		// Serialize original counts
+		countsJSON, err := json.Marshal(originalCounts)
+		if err != nil {
+			return err
+		}
+		countsStr := string(countsJSON)
+
+		schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
+			Kind:                  "Elasticsearch",
+			Name:                  resource.GetName(),
+			OriginalNodeSetCounts: &countsStr,
+		})
+
+		// Set all counts to 0
+		for _, ns := range nodeSets {
+			nsMap, _ := ns.(map[string]interface{})
+			if nsMap != nil {
+				nsMap["count"] = int64(0)
+			}
+		}
+
+		if err := r.Update(ctx, resource); err != nil {
+			return err
+		}
+		logger.Info("Scaled down Elasticsearch nodeSets", "name", resource.GetName(), "originalCounts", originalCounts)
+	}
+
+	return nil
+}
+
+// wakeElasticsearchResource restores ECK Elasticsearch nodeSet counts
+func (r *SleepScheduleReconciler) wakeElasticsearchResource(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, managed slumlordv1alpha1.ManagedWorkload) error {
+	logger := log.FromContext(ctx)
+
+	resource := &unstructured.Unstructured{}
+	resource.SetGroupVersionKind(eckElasticsearchGVK)
+	if err := r.Get(ctx, client.ObjectKey{Namespace: schedule.Namespace, Name: managed.Name}, resource); err != nil {
+		logger.Error(err, "Failed to get Elasticsearch", "name", managed.Name)
+		return nil
+	}
+
+	if managed.OriginalNodeSetCounts == nil {
+		return nil
+	}
+
+	var originalCounts map[string]int32
+	if err := json.Unmarshal([]byte(*managed.OriginalNodeSetCounts), &originalCounts); err != nil {
+		logger.Error(err, "Failed to parse original nodeSet counts", "name", managed.Name)
+		return nil
+	}
+
+	spec, _ := resource.Object["spec"].(map[string]interface{})
+	if spec == nil {
+		return nil
+	}
+
+	nodeSets, _ := spec["nodeSets"].([]interface{})
+	for _, ns := range nodeSets {
+		nsMap, _ := ns.(map[string]interface{})
+		if nsMap == nil {
+			continue
+		}
+		name, _ := nsMap["name"].(string)
+		if count, ok := originalCounts[name]; ok {
+			nsMap["count"] = int64(count)
+		}
+	}
+
+	if err := r.Update(ctx, resource); err != nil {
+		return err
+	}
+	logger.Info("Restored Elasticsearch nodeSets", "name", managed.Name, "originalCounts", originalCounts)
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -319,6 +320,8 @@ func newCustomRESTMapper() meta.RESTMapper {
 		{Group: "kustomize.toolkit.fluxcd.io", Version: "v1"},
 		{Group: "monitoring.coreos.com", Version: "v1"},
 		{Group: "k8s.mariadb.com", Version: "v1alpha1"},
+		{Group: "elasticsearch.k8s.elastic.co", Version: "v1"},
+		{Group: "kibana.k8s.elastic.co", Version: "v1"},
 	})
 	mapper.Add(schema.GroupVersionKind{Group: "postgresql.cnpg.io", Version: "v1", Kind: "Cluster"}, meta.RESTScopeNamespace)
 	mapper.Add(schema.GroupVersionKind{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"}, meta.RESTScopeNamespace)
@@ -328,6 +331,8 @@ func newCustomRESTMapper() meta.RESTMapper {
 	mapper.Add(schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "Prometheus"}, meta.RESTScopeNamespace)
 	mapper.Add(schema.GroupVersionKind{Group: "k8s.mariadb.com", Version: "v1alpha1", Kind: "MariaDB"}, meta.RESTScopeNamespace)
 	mapper.Add(schema.GroupVersionKind{Group: "k8s.mariadb.com", Version: "v1alpha1", Kind: "MaxScale"}, meta.RESTScopeNamespace)
+	mapper.Add(schema.GroupVersionKind{Group: "elasticsearch.k8s.elastic.co", Version: "v1", Kind: "Elasticsearch"}, meta.RESTScopeNamespace)
+	mapper.Add(schema.GroupVersionKind{Group: "kibana.k8s.elastic.co", Version: "v1", Kind: "Kibana"}, meta.RESTScopeNamespace)
 	return mapper
 }
 
@@ -2815,5 +2820,329 @@ func TestSleepSchedule_ComputeRequeueInterval(t *testing.T) {
 				t.Errorf("computeRequeueInterval() = %v, want %v", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestReconcile_ScalesDownElasticsearch(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	es := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "elasticsearch.k8s.elastic.co/v1",
+			"kind":       "Elasticsearch",
+			"metadata": map[string]interface{}{
+				"name":      "test-es",
+				"namespace": namespace,
+				"labels":    map[string]interface{}{"app": "test"},
+			},
+			"spec": map[string]interface{}{
+				"nodeSets": []interface{}{
+					map[string]interface{}{
+						"name":  "master",
+						"count": int64(3),
+					},
+					map[string]interface{}{
+						"name":  "data",
+						"count": int64(5),
+					},
+				},
+			},
+		},
+	}
+
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-schedule", Namespace: namespace},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Elasticsearch"},
+			},
+			Schedule: slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(newCustomRESTMapper()).
+		WithObjects(es, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	// Verify all nodeSets scaled to 0
+	updated := &unstructured.Unstructured{}
+	updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "elasticsearch.k8s.elastic.co", Version: "v1", Kind: "Elasticsearch"})
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-es", Namespace: namespace}, updated); err != nil {
+		t.Fatalf("Failed to get Elasticsearch: %v", err)
+	}
+	spec := updated.Object["spec"].(map[string]interface{})
+	nodeSets := spec["nodeSets"].([]interface{})
+	for _, ns := range nodeSets {
+		nsMap := ns.(map[string]interface{})
+		if count, ok := nsMap["count"].(int64); !ok || count != 0 {
+			t.Errorf("Expected nodeSet %s count = 0, got %v", nsMap["name"], nsMap["count"])
+		}
+	}
+
+	// Verify managed workload status
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if !updatedSchedule.Status.Sleeping {
+		t.Error("Expected status.sleeping = true")
+	}
+	if len(updatedSchedule.Status.ManagedWorkloads) != 1 {
+		t.Fatalf("Expected 1 managed workload, got %d", len(updatedSchedule.Status.ManagedWorkloads))
+	}
+	mw := updatedSchedule.Status.ManagedWorkloads[0]
+	if mw.Kind != "Elasticsearch" {
+		t.Errorf("Expected kind = Elasticsearch, got %s", mw.Kind)
+	}
+	if mw.OriginalNodeSetCounts == nil {
+		t.Fatal("Expected OriginalNodeSetCounts to be set")
+	}
+	var counts map[string]int32
+	if err := json.Unmarshal([]byte(*mw.OriginalNodeSetCounts), &counts); err != nil {
+		t.Fatalf("Failed to parse OriginalNodeSetCounts: %v", err)
+	}
+	if counts["master"] != 3 {
+		t.Errorf("Expected master count = 3, got %d", counts["master"])
+	}
+	if counts["data"] != 5 {
+		t.Errorf("Expected data count = 5, got %d", counts["data"])
+	}
+}
+
+func TestReconcile_WakesElasticsearch(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	es := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "elasticsearch.k8s.elastic.co/v1",
+			"kind":       "Elasticsearch",
+			"metadata": map[string]interface{}{
+				"name":      "test-es",
+				"namespace": namespace,
+				"labels":    map[string]interface{}{"app": "test"},
+			},
+			"spec": map[string]interface{}{
+				"nodeSets": []interface{}{
+					map[string]interface{}{
+						"name":  "master",
+						"count": int64(0),
+					},
+					map[string]interface{}{
+						"name":  "data",
+						"count": int64(0),
+					},
+				},
+			},
+		},
+	}
+
+	countsJSON := `{"master":3,"data":5}`
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-schedule", Namespace: namespace},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Elasticsearch"},
+			},
+			Schedule: neverSleepingSchedule(),
+		},
+		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
+			Sleeping: true,
+			ManagedWorkloads: []slumlordv1alpha1.ManagedWorkload{
+				{Kind: "Elasticsearch", Name: "test-es", OriginalNodeSetCounts: &countsJSON},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(newCustomRESTMapper()).
+		WithObjects(es, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+	if err := fakeClient.Status().Update(ctx, schedule); err != nil {
+		t.Fatalf("Failed to set initial status: %v", err)
+	}
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	updated := &unstructured.Unstructured{}
+	updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "elasticsearch.k8s.elastic.co", Version: "v1", Kind: "Elasticsearch"})
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-es", Namespace: namespace}, updated); err != nil {
+		t.Fatalf("Failed to get Elasticsearch: %v", err)
+	}
+	spec := updated.Object["spec"].(map[string]interface{})
+	nodeSets := spec["nodeSets"].([]interface{})
+	expectedCounts := map[string]int64{"master": 3, "data": 5}
+	for _, ns := range nodeSets {
+		nsMap := ns.(map[string]interface{})
+		name := nsMap["name"].(string)
+		expected := expectedCounts[name]
+		if count, ok := nsMap["count"].(int64); !ok || count != expected {
+			t.Errorf("Expected nodeSet %s count = %d, got %v", name, expected, nsMap["count"])
+		}
+	}
+}
+
+func TestReconcile_ScalesDownKibana(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	kb := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "kibana.k8s.elastic.co/v1",
+			"kind":       "Kibana",
+			"metadata": map[string]interface{}{
+				"name":      "test-kibana",
+				"namespace": namespace,
+				"labels":    map[string]interface{}{"app": "test"},
+			},
+			"spec": map[string]interface{}{
+				"count": int64(2),
+			},
+		},
+	}
+
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-schedule", Namespace: namespace},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Kibana"},
+			},
+			Schedule: slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(newCustomRESTMapper()).
+		WithObjects(kb, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	updated := &unstructured.Unstructured{}
+	updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "kibana.k8s.elastic.co", Version: "v1", Kind: "Kibana"})
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-kibana", Namespace: namespace}, updated); err != nil {
+		t.Fatalf("Failed to get Kibana: %v", err)
+	}
+	spec := updated.Object["spec"].(map[string]interface{})
+	if count, ok := spec["count"].(int64); !ok || count != 0 {
+		t.Errorf("Expected spec.count = 0, got %v", spec["count"])
+	}
+
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if !updatedSchedule.Status.Sleeping {
+		t.Error("Expected status.sleeping = true")
+	}
+	if len(updatedSchedule.Status.ManagedWorkloads) != 1 {
+		t.Fatalf("Expected 1 managed workload, got %d", len(updatedSchedule.Status.ManagedWorkloads))
+	}
+	if updatedSchedule.Status.ManagedWorkloads[0].Kind != "Kibana" {
+		t.Errorf("Expected kind = Kibana, got %s", updatedSchedule.Status.ManagedWorkloads[0].Kind)
+	}
+	if *updatedSchedule.Status.ManagedWorkloads[0].OriginalReplicas != 2 {
+		t.Errorf("Expected original replicas = 2, got %d", *updatedSchedule.Status.ManagedWorkloads[0].OriginalReplicas)
+	}
+}
+
+func TestReconcile_WakesKibana(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	kb := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "kibana.k8s.elastic.co/v1",
+			"kind":       "Kibana",
+			"metadata": map[string]interface{}{
+				"name":      "test-kibana",
+				"namespace": namespace,
+				"labels":    map[string]interface{}{"app": "test"},
+			},
+			"spec": map[string]interface{}{
+				"count": int64(0),
+			},
+		},
+	}
+
+	originalReplicas := int32(2)
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-schedule", Namespace: namespace},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Kibana"},
+			},
+			Schedule: neverSleepingSchedule(),
+		},
+		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
+			Sleeping: true,
+			ManagedWorkloads: []slumlordv1alpha1.ManagedWorkload{
+				{Kind: "Kibana", Name: "test-kibana", OriginalReplicas: &originalReplicas},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(newCustomRESTMapper()).
+		WithObjects(kb, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+	if err := fakeClient.Status().Update(ctx, schedule); err != nil {
+		t.Fatalf("Failed to set initial status: %v", err)
+	}
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	updated := &unstructured.Unstructured{}
+	updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "kibana.k8s.elastic.co", Version: "v1", Kind: "Kibana"})
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-kibana", Namespace: namespace}, updated); err != nil {
+		t.Fatalf("Failed to get Kibana: %v", err)
+	}
+	spec := updated.Object["spec"].(map[string]interface{})
+	if count, ok := spec["count"].(int64); !ok || count != 2 {
+		t.Errorf("Expected spec.count = 2, got %v", spec["count"])
 	}
 }
