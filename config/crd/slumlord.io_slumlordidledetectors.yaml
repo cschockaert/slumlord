@@ -127,7 +127,7 @@ spec:
                   types:
                     description: |-
                       Types specifies which workload types to target
-                      Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus, MariaDB, MaxScale
+                      Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus, MariaDB, MaxScale, Elasticsearch, Kibana
                     items:
                       type: string
                     type: array

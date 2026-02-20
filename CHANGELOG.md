@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-02-20
+
+### Added
+
+- Support for ECK (Elastic Cloud on Kubernetes) CRDs: `Elasticsearch` and `Kibana` in SlumlordSleepSchedule
+- Elasticsearch sleep: sets all `spec.nodeSets[].count` to 0, stores original counts as JSON in `OriginalNodeSetCounts`
+- Kibana sleep: sets `spec.count` to 0, reuses `OriginalReplicas` for restore
+- RBAC permissions for `elasticsearch.k8s.elastic.co` and `kibana.k8s.elastic.co` resources
+- Graceful handling when ECK CRDs are not installed (skip with log, no crash)
+
 ## [2.12.1] - 2026-02-18
 
 ### Changed
@@ -224,7 +234,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.12.1...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.13.0...HEAD
+[2.13.0]: https://github.com/cschockaert/slumlord/compare/v2.12.1...v2.13.0
 [2.12.1]: https://github.com/cschockaert/slumlord/compare/v2.12.0...v2.12.1
 [2.12.0]: https://github.com/cschockaert/slumlord/compare/v2.11.0...v2.12.0
 [2.11.0]: https://github.com/cschockaert/slumlord/compare/v2.10.0...v2.11.0

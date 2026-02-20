@@ -123,6 +123,28 @@ rules:
       - patch
       - update
       - watch
+  # ECK Elasticsearch
+  - apiGroups:
+      - elasticsearch.k8s.elastic.co
+    resources:
+      - elasticsearches
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  # ECK Kibana
+  - apiGroups:
+      - kibana.k8s.elastic.co
+    resources:
+      - kibanas
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
   # Events (sleep schedule transitions)
   - apiGroups:
       - ""

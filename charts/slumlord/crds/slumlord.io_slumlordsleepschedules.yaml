@@ -111,7 +111,7 @@ spec:
                   types:
                     description: |-
                       Types specifies which workload types to target
-                      Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus, MariaDB, MaxScale
+                      Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus, MariaDB, MaxScale, Elasticsearch, Kibana
                     items:
                       type: string
                     type: array
@@ -202,7 +202,8 @@ spec:
                     kind:
                       description: Kind is the workload kind (Deployment, StatefulSet,
                         CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler,
-                        Alertmanager, Prometheus, MariaDB, MaxScale)
+                        Alertmanager, Prometheus, MariaDB, MaxScale, Elasticsearch,
+                        Kibana)
                       type: string
                     name:
                       description: Name is the workload name
@@ -210,6 +211,11 @@ spec:
                     originalHibernation:
                       description: OriginalHibernation stores the hibernation annotation
                         value before sleeping (for CNPG Cluster)
+                      type: string
+                    originalNodeSetCounts:
+                      description: |-
+                        OriginalNodeSetCounts stores the original nodeSet counts as JSON (for Elasticsearch)
+                        Format: {"nodeSetName": count, ...}
                       type: string
                     originalReplicas:
                       description: OriginalReplicas stores the replica count before

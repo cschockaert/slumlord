@@ -35,7 +35,7 @@ type WorkloadSelector struct {
 	MatchNames []string `json:"matchNames,omitempty"`
 
 	// Types specifies which workload types to target
-	// Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus, MariaDB, MaxScale
+	// Valid values: Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus, MariaDB, MaxScale, Elasticsearch, Kibana
 	// +optional
 	Types []string `json:"types,omitempty"`
 }
@@ -86,7 +86,7 @@ type SlumlordSleepScheduleStatus struct {
 
 // ManagedWorkload tracks a workload managed by this schedule
 type ManagedWorkload struct {
-	// Kind is the workload kind (Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus, MariaDB, MaxScale)
+	// Kind is the workload kind (Deployment, StatefulSet, CronJob, Cluster, HelmRelease, Kustomization, ThanosRuler, Alertmanager, Prometheus, MariaDB, MaxScale, Elasticsearch, Kibana)
 	Kind string `json:"kind"`
 
 	// Name is the workload name
@@ -103,6 +103,11 @@ type ManagedWorkload struct {
 	// OriginalHibernation stores the hibernation annotation value before sleeping (for CNPG Cluster)
 	// +optional
 	OriginalHibernation *string `json:"originalHibernation,omitempty"`
+
+	// OriginalNodeSetCounts stores the original nodeSet counts as JSON (for Elasticsearch)
+	// Format: {"nodeSetName": count, ...}
+	// +optional
+	OriginalNodeSetCounts *string `json:"originalNodeSetCounts,omitempty"`
 }
 
 // +kubebuilder:object:root=true
