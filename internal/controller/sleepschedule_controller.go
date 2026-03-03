@@ -655,29 +655,36 @@ func (r *SleepScheduleReconciler) timeUntilNextTransition(schedule *slumlordv1al
 	return 0
 }
 
-// sleepWorkloads scales down or suspends matched workloads
+// sleepWorkloads scales down or suspends matched workloads.
+// Status is persisted after each workload type section so that already-scaled
+// workloads are not lost if a later operation encounters a conflict error.
 func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule) error {
 	logger := log.FromContext(ctx)
-	schedule.Status.ManagedWorkloads = nil
+
+	// Build lookup of already-managed workloads (from a previous partial run)
+	managed := make(map[string]bool, len(schedule.Status.ManagedWorkloads))
+	for _, mw := range schedule.Status.ManagedWorkloads {
+		managed[mw.Kind+"/"+mw.Name] = true
+	}
 
 	// Suspend operator-managed resources BEFORE scaling workloads to prevent reconciliation
 	if r.shouldManageType(schedule, "HelmRelease") {
-		if err := r.sleepSuspendResources(ctx, schedule, fluxHelmReleaseGVK, "HelmRelease"); err != nil {
+		if err := r.sleepSuspendResources(ctx, schedule, fluxHelmReleaseGVK, "HelmRelease", managed); err != nil {
 			return err
 		}
 	}
 	if r.shouldManageType(schedule, "Kustomization") {
-		if err := r.sleepSuspendResources(ctx, schedule, fluxKustomizationGVK, "Kustomization"); err != nil {
+		if err := r.sleepSuspendResources(ctx, schedule, fluxKustomizationGVK, "Kustomization", managed); err != nil {
 			return err
 		}
 	}
 	if r.shouldManageType(schedule, "MariaDB") {
-		if err := r.sleepSuspendResources(ctx, schedule, mariadbGVK, "MariaDB"); err != nil {
+		if err := r.sleepSuspendResources(ctx, schedule, mariadbGVK, "MariaDB", managed); err != nil {
 			return err
 		}
 	}
 	if r.shouldManageType(schedule, "MaxScale") {
-		if err := r.sleepSuspendResources(ctx, schedule, mariadbMaxScaleGVK, "MaxScale"); err != nil {
+		if err := r.sleepSuspendResources(ctx, schedule, mariadbMaxScaleGVK, "MaxScale", managed); err != nil {
 			return err
 		}
 	}
@@ -689,22 +696,31 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 			return err
 		}
 
+		changed := false
 		for i := range deployments.Items {
 			deploy := &deployments.Items[i]
+			if managed["Deployment/"+deploy.Name] {
+				continue
+			}
 			if deploy.Spec.Replicas != nil && *deploy.Spec.Replicas > 0 {
 				original := *deploy.Spec.Replicas
-				schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
-					Kind:             "Deployment",
-					Name:             deploy.Name,
-					OriginalReplicas: &original,
-				})
-
 				zero := int32(0)
 				deploy.Spec.Replicas = &zero
 				if err := r.Update(ctx, deploy); err != nil {
 					return err
 				}
+				schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
+					Kind:             "Deployment",
+					Name:             deploy.Name,
+					OriginalReplicas: &original,
+				})
+				changed = true
 				logger.Info("Scaled down deployment", "name", deploy.Name, "originalReplicas", original)
+			}
+		}
+		if changed {
+			if err := r.Status().Update(ctx, schedule); err != nil {
+				return err
 			}
 		}
 	}
@@ -716,22 +732,31 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 			return err
 		}
 
+		changed := false
 		for i := range statefulsets.Items {
 			sts := &statefulsets.Items[i]
+			if managed["StatefulSet/"+sts.Name] {
+				continue
+			}
 			if sts.Spec.Replicas != nil && *sts.Spec.Replicas > 0 {
 				original := *sts.Spec.Replicas
-				schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
-					Kind:             "StatefulSet",
-					Name:             sts.Name,
-					OriginalReplicas: &original,
-				})
-
 				zero := int32(0)
 				sts.Spec.Replicas = &zero
 				if err := r.Update(ctx, sts); err != nil {
 					return err
 				}
+				schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
+					Kind:             "StatefulSet",
+					Name:             sts.Name,
+					OriginalReplicas: &original,
+				})
+				changed = true
 				logger.Info("Scaled down statefulset", "name", sts.Name, "originalReplicas", original)
+			}
+		}
+		if changed {
+			if err := r.Status().Update(ctx, schedule); err != nil {
+				return err
 			}
 		}
 	}
@@ -743,25 +768,34 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 			return err
 		}
 
+		changed := false
 		for i := range cronjobs.Items {
 			cj := &cronjobs.Items[i]
+			if managed["CronJob/"+cj.Name] {
+				continue
+			}
 			if cj.Spec.Suspend == nil || !*cj.Spec.Suspend {
 				original := false
 				if cj.Spec.Suspend != nil {
 					original = *cj.Spec.Suspend
+				}
+				suspend := true
+				cj.Spec.Suspend = &suspend
+				if err := r.Update(ctx, cj); err != nil {
+					return err
 				}
 				schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
 					Kind:            "CronJob",
 					Name:            cj.Name,
 					OriginalSuspend: &original,
 				})
-
-				suspend := true
-				cj.Spec.Suspend = &suspend
-				if err := r.Update(ctx, cj); err != nil {
-					return err
-				}
+				changed = true
 				logger.Info("Suspended cronjob", "name", cj.Name)
+			}
+		}
+		if changed {
+			if err := r.Status().Update(ctx, schedule); err != nil {
+				return err
 			}
 		}
 	}
@@ -782,8 +816,12 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 				return err
 			}
 		} else {
+			changed := false
 			for i := range clusterList.Items {
 				cluster := &clusterList.Items[i]
+				if managed["Cluster/"+cluster.GetName()] {
+					continue
+				}
 				annotations := cluster.GetAnnotations()
 				currentHibernation := ""
 				if annotations != nil {
@@ -792,12 +830,6 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 
 				if currentHibernation != "on" {
 					originalHibernation := currentHibernation
-					schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
-						Kind:                "Cluster",
-						Name:                cluster.GetName(),
-						OriginalHibernation: &originalHibernation,
-					})
-
 					if annotations == nil {
 						annotations = make(map[string]string)
 					}
@@ -806,7 +838,18 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 					if err := r.Update(ctx, cluster); err != nil {
 						return err
 					}
+					schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
+						Kind:                "Cluster",
+						Name:                cluster.GetName(),
+						OriginalHibernation: &originalHibernation,
+					})
+					changed = true
 					logger.Info("Hibernated CNPG cluster", "name", cluster.GetName())
+				}
+			}
+			if changed {
+				if err := r.Status().Update(ctx, schedule); err != nil {
+					return err
 				}
 			}
 		}
@@ -814,31 +857,31 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 
 	// Handle Prometheus Operator CRDs (ThanosRuler, Alertmanager, Prometheus)
 	if r.shouldManageType(schedule, "ThanosRuler") {
-		if err := r.sleepReplicaResources(ctx, schedule, promThanosRulerGVK, "ThanosRuler"); err != nil {
+		if err := r.sleepReplicaResources(ctx, schedule, promThanosRulerGVK, "ThanosRuler", managed); err != nil {
 			return err
 		}
 	}
 	if r.shouldManageType(schedule, "Alertmanager") {
-		if err := r.sleepReplicaResources(ctx, schedule, promAlertmanagerGVK, "Alertmanager"); err != nil {
+		if err := r.sleepReplicaResources(ctx, schedule, promAlertmanagerGVK, "Alertmanager", managed); err != nil {
 			return err
 		}
 	}
 	if r.shouldManageType(schedule, "Prometheus") {
-		if err := r.sleepReplicaResources(ctx, schedule, promPrometheusGVK, "Prometheus"); err != nil {
+		if err := r.sleepReplicaResources(ctx, schedule, promPrometheusGVK, "Prometheus", managed); err != nil {
 			return err
 		}
 	}
 
 	// Handle ECK Kibana (uses spec.count)
 	if r.shouldManageType(schedule, "Kibana") {
-		if err := r.sleepCountResources(ctx, schedule, eckKibanaGVK, "Kibana"); err != nil {
+		if err := r.sleepCountResources(ctx, schedule, eckKibanaGVK, "Kibana", managed); err != nil {
 			return err
 		}
 	}
 
 	// Handle ECK Elasticsearch (uses spec.nodeSets[].count)
 	if r.shouldManageType(schedule, "Elasticsearch") {
-		if err := r.sleepElasticsearchResources(ctx, schedule); err != nil {
+		if err := r.sleepElasticsearchResources(ctx, schedule, managed); err != nil {
 			return err
 		}
 	}
@@ -989,7 +1032,7 @@ func (r *SleepScheduleReconciler) shouldManageType(schedule *slumlordv1alpha1.Sl
 }
 
 // sleepSuspendResources suspends CRDs that use spec.suspend (FluxCD, MariaDB operator)
-func (r *SleepScheduleReconciler) sleepSuspendResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, gvk schema.GroupVersionKind, kind string) error {
+func (r *SleepScheduleReconciler) sleepSuspendResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, gvk schema.GroupVersionKind, kind string, alreadyManaged map[string]bool) error {
 	logger := log.FromContext(ctx)
 
 	resourceList := &unstructured.UnstructuredList{}
@@ -1007,8 +1050,12 @@ func (r *SleepScheduleReconciler) sleepSuspendResources(ctx context.Context, sch
 		return err
 	}
 
+	changed := false
 	for i := range resourceList.Items {
 		resource := &resourceList.Items[i]
+		if alreadyManaged[kind+"/"+resource.GetName()] {
+			continue
+		}
 		spec, _ := resource.Object["spec"].(map[string]interface{})
 		currentSuspend := false
 		if spec != nil {
@@ -1019,12 +1066,6 @@ func (r *SleepScheduleReconciler) sleepSuspendResources(ctx context.Context, sch
 
 		if !currentSuspend {
 			original := currentSuspend
-			schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
-				Kind:            kind,
-				Name:            resource.GetName(),
-				OriginalSuspend: &original,
-			})
-
 			if spec == nil {
 				spec = make(map[string]interface{})
 				resource.Object["spec"] = spec
@@ -1033,7 +1074,19 @@ func (r *SleepScheduleReconciler) sleepSuspendResources(ctx context.Context, sch
 			if err := r.Update(ctx, resource); err != nil {
 				return err
 			}
+			schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
+				Kind:            kind,
+				Name:            resource.GetName(),
+				OriginalSuspend: &original,
+			})
+			changed = true
 			logger.Info("Suspended resource", "kind", kind, "name", resource.GetName())
+		}
+	}
+
+	if changed {
+		if err := r.Status().Update(ctx, schedule); err != nil {
+			return err
 		}
 	}
 
@@ -1069,7 +1122,7 @@ func (r *SleepScheduleReconciler) wakeSuspendResource(ctx context.Context, sched
 }
 
 // sleepReplicaResources scales down CRDs that use spec.replicas (e.g., Prometheus Operator CRDs)
-func (r *SleepScheduleReconciler) sleepReplicaResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, gvk schema.GroupVersionKind, kind string) error {
+func (r *SleepScheduleReconciler) sleepReplicaResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, gvk schema.GroupVersionKind, kind string, alreadyManaged map[string]bool) error {
 	logger := log.FromContext(ctx)
 
 	resourceList := &unstructured.UnstructuredList{}
@@ -1087,8 +1140,12 @@ func (r *SleepScheduleReconciler) sleepReplicaResources(ctx context.Context, sch
 		return err
 	}
 
+	changed := false
 	for i := range resourceList.Items {
 		resource := &resourceList.Items[i]
+		if alreadyManaged[kind+"/"+resource.GetName()] {
+			continue
+		}
 		spec, _ := resource.Object["spec"].(map[string]interface{})
 		if spec == nil {
 			continue
@@ -1106,17 +1163,23 @@ func (r *SleepScheduleReconciler) sleepReplicaResources(ctx context.Context, sch
 
 		if currentReplicas > 0 {
 			original := currentReplicas
+			spec["replicas"] = int64(0)
+			if err := r.Update(ctx, resource); err != nil {
+				return err
+			}
 			schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
 				Kind:             kind,
 				Name:             resource.GetName(),
 				OriginalReplicas: &original,
 			})
-
-			spec["replicas"] = int64(0)
-			if err := r.Update(ctx, resource); err != nil {
-				return err
-			}
+			changed = true
 			logger.Info("Scaled down resource", "kind", kind, "name", resource.GetName(), "originalReplicas", original)
+		}
+	}
+
+	if changed {
+		if err := r.Status().Update(ctx, schedule); err != nil {
+			return err
 		}
 	}
 
@@ -1208,7 +1271,7 @@ func (r *SleepScheduleReconciler) setScheduleCondition(
 }
 
 // sleepCountResources scales down CRDs that use spec.count (e.g., ECK Kibana)
-func (r *SleepScheduleReconciler) sleepCountResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, gvk schema.GroupVersionKind, kind string) error {
+func (r *SleepScheduleReconciler) sleepCountResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, gvk schema.GroupVersionKind, kind string, alreadyManaged map[string]bool) error {
 	logger := log.FromContext(ctx)
 
 	resourceList := &unstructured.UnstructuredList{}
@@ -1226,8 +1289,12 @@ func (r *SleepScheduleReconciler) sleepCountResources(ctx context.Context, sched
 		return err
 	}
 
+	changed := false
 	for i := range resourceList.Items {
 		resource := &resourceList.Items[i]
+		if alreadyManaged[kind+"/"+resource.GetName()] {
+			continue
+		}
 		spec, _ := resource.Object["spec"].(map[string]interface{})
 		if spec == nil {
 			continue
@@ -1245,17 +1312,23 @@ func (r *SleepScheduleReconciler) sleepCountResources(ctx context.Context, sched
 
 		if currentCount > 0 {
 			original := currentCount
+			spec["count"] = int64(0)
+			if err := r.Update(ctx, resource); err != nil {
+				return err
+			}
 			schedule.Status.ManagedWorkloads = append(schedule.Status.ManagedWorkloads, slumlordv1alpha1.ManagedWorkload{
 				Kind:             kind,
 				Name:             resource.GetName(),
 				OriginalReplicas: &original,
 			})
-
-			spec["count"] = int64(0)
-			if err := r.Update(ctx, resource); err != nil {
-				return err
-			}
+			changed = true
 			logger.Info("Scaled down resource", "kind", kind, "name", resource.GetName(), "originalCount", original)
+		}
+	}
+
+	if changed {
+		if err := r.Status().Update(ctx, schedule); err != nil {
+			return err
 		}
 	}
 
@@ -1290,7 +1363,7 @@ func (r *SleepScheduleReconciler) wakeCountResource(ctx context.Context, schedul
 }
 
 // sleepElasticsearchResources scales down ECK Elasticsearch nodeSets to 0
-func (r *SleepScheduleReconciler) sleepElasticsearchResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule) error {
+func (r *SleepScheduleReconciler) sleepElasticsearchResources(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule, alreadyManaged map[string]bool) error {
 	logger := log.FromContext(ctx)
 
 	resourceList := &unstructured.UnstructuredList{}
@@ -1308,8 +1381,12 @@ func (r *SleepScheduleReconciler) sleepElasticsearchResources(ctx context.Contex
 		return err
 	}
 
+	changed := false
 	for i := range resourceList.Items {
 		resource := &resourceList.Items[i]
+		if alreadyManaged["Elasticsearch/"+resource.GetName()] {
+			continue
+		}
 		spec, _ := resource.Object["spec"].(map[string]interface{})
 		if spec == nil {
 			continue
@@ -1346,6 +1423,18 @@ func (r *SleepScheduleReconciler) sleepElasticsearchResources(ctx context.Contex
 			continue
 		}
 
+		// Set all counts to 0
+		for _, ns := range nodeSets {
+			nsMap, _ := ns.(map[string]interface{})
+			if nsMap != nil {
+				nsMap["count"] = int64(0)
+			}
+		}
+
+		if err := r.Update(ctx, resource); err != nil {
+			return err
+		}
+
 		// Serialize original counts
 		countsJSON, err := json.Marshal(originalCounts)
 		if err != nil {
@@ -1358,19 +1447,14 @@ func (r *SleepScheduleReconciler) sleepElasticsearchResources(ctx context.Contex
 			Name:                  resource.GetName(),
 			OriginalNodeSetCounts: &countsStr,
 		})
+		changed = true
+		logger.Info("Scaled down Elasticsearch nodeSets", "name", resource.GetName(), "originalCounts", originalCounts)
+	}
 
-		// Set all counts to 0
-		for _, ns := range nodeSets {
-			nsMap, _ := ns.(map[string]interface{})
-			if nsMap != nil {
-				nsMap["count"] = int64(0)
-			}
-		}
-
-		if err := r.Update(ctx, resource); err != nil {
+	if changed {
+		if err := r.Status().Update(ctx, schedule); err != nil {
 			return err
 		}
-		logger.Info("Scaled down Elasticsearch nodeSets", "name", resource.GetName(), "originalCounts", originalCounts)
 	}
 
 	return nil
