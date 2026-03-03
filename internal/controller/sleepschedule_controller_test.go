@@ -3240,6 +3240,15 @@ func TestReconcile_SleepRetryPreservesManagedWorkloads(t *testing.T) {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
+	// Verify deploy-a was NOT re-scaled (still 0, untouched)
+	var updatedA appsv1.Deployment
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "deploy-a", Namespace: namespace}, &updatedA); err != nil {
+		t.Fatalf("Failed to get deploy-a: %v", err)
+	}
+	if *updatedA.Spec.Replicas != 0 {
+		t.Errorf("Expected deploy-a replicas = 0 (untouched), got %d", *updatedA.Spec.Replicas)
+	}
+
 	// Verify deploy-b was scaled to 0
 	var updatedB appsv1.Deployment
 	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "deploy-b", Namespace: namespace}, &updatedB); err != nil {
@@ -3253,6 +3262,9 @@ func TestReconcile_SleepRetryPreservesManagedWorkloads(t *testing.T) {
 	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
 	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
 		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if !updatedSchedule.Status.Sleeping {
+		t.Error("Expected status.sleeping = true")
 	}
 	if len(updatedSchedule.Status.ManagedWorkloads) != 2 {
 		t.Fatalf("Expected 2 managed workloads, got %d", len(updatedSchedule.Status.ManagedWorkloads))
