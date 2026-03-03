@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.13.1] - 2026-03-03
+
+### Fixed
+
+- Conflict error during `sleepWorkloads` no longer causes loss of `ManagedWorkloads` (#64)
+- Status is now persisted after each workload type section so partial progress survives retries
+- Workload entries are appended to `ManagedWorkloads` only after successful scale-down
+
 ## [2.13.0] - 2026-02-20
 
 ### Added
@@ -234,7 +242,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.13.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.13.1...HEAD
+[2.13.1]: https://github.com/cschockaert/slumlord/compare/v2.13.0...v2.13.1
 [2.13.0]: https://github.com/cschockaert/slumlord/compare/v2.12.1...v2.13.0
 [2.12.1]: https://github.com/cschockaert/slumlord/compare/v2.12.0...v2.12.1
 [2.12.0]: https://github.com/cschockaert/slumlord/compare/v2.11.0...v2.12.0
