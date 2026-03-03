@@ -3146,3 +3146,127 @@ func TestReconcile_WakesKibana(t *testing.T) {
 		t.Errorf("Expected spec.count = 2, got %v", spec["count"])
 	}
 }
+
+// TestReconcile_SleepRetryPreservesManagedWorkloads verifies that when sleepWorkloads
+// is retried (e.g., after a conflict error on a previous attempt), already-managed
+// workloads are preserved and not re-processed. This prevents loss of original replica
+// info for workloads already scaled to 0.
+func TestReconcile_SleepRetryPreservesManagedWorkloads(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// deploy-a: already scaled to 0 by a previous partial sleep run
+	zeroReplicas := int32(0)
+	deployA := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "deploy-a",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &zeroReplicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "nginx"}}},
+			},
+		},
+	}
+
+	// deploy-b: not yet scaled, should be picked up on retry
+	threeReplicas := int32(3)
+	deployB := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "deploy-b",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &threeReplicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "nginx"}}},
+			},
+		},
+	}
+
+	// Schedule already in partial-sleep state: deploy-a is managed with original=5
+	originalA := int32(5)
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-schedule",
+			Namespace: namespace,
+		},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Schedule: slumlordv1alpha1.SleepWindow{
+				Start:    "00:00",
+				End:      "23:59",
+				Timezone: "UTC",
+			},
+		},
+		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
+			ManagedWorkloads: []slumlordv1alpha1.ManagedWorkload{
+				{
+					Kind:             "Deployment",
+					Name:             "deploy-a",
+					OriginalReplicas: &originalA,
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deployA, deployB, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	// Pre-set the status
+	if err := fakeClient.Status().Update(ctx, schedule); err != nil {
+		t.Fatalf("Failed to set initial status: %v", err)
+	}
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	// Verify deploy-b was scaled to 0
+	var updatedB appsv1.Deployment
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "deploy-b", Namespace: namespace}, &updatedB); err != nil {
+		t.Fatalf("Failed to get deploy-b: %v", err)
+	}
+	if *updatedB.Spec.Replicas != 0 {
+		t.Errorf("Expected deploy-b replicas = 0, got %d", *updatedB.Spec.Replicas)
+	}
+
+	// Verify status has BOTH managed workloads
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if len(updatedSchedule.Status.ManagedWorkloads) != 2 {
+		t.Fatalf("Expected 2 managed workloads, got %d", len(updatedSchedule.Status.ManagedWorkloads))
+	}
+
+	// Verify deploy-a's original replicas are preserved (5, not 0)
+	managed := make(map[string]*int32)
+	for _, mw := range updatedSchedule.Status.ManagedWorkloads {
+		managed[mw.Name] = mw.OriginalReplicas
+	}
+	if managed["deploy-a"] == nil || *managed["deploy-a"] != 5 {
+		t.Errorf("Expected deploy-a originalReplicas = 5, got %v", managed["deploy-a"])
+	}
+	if managed["deploy-b"] == nil || *managed["deploy-b"] != 3 {
+		t.Errorf("Expected deploy-b originalReplicas = 3, got %v", managed["deploy-b"])
+	}
+}
