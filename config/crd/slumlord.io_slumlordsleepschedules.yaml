@@ -21,12 +21,6 @@ spec:
     - jsonPath: .status.sleeping
       name: Sleeping
       type: boolean
-    - jsonPath: .spec.schedule.start
-      name: Start
-      type: string
-    - jsonPath: .spec.schedule.end
-      name: End
-      type: string
     - jsonPath: .status.daysDisplay
       name: Days
       type: string
@@ -66,7 +60,9 @@ spec:
                   Defaults to 5m if not specified.
                 type: string
               schedule:
-                description: Schedule defines when workloads should sleep
+                description: |-
+                  Schedule defines when workloads should sleep (single window).
+                  Use Schedules for multiple windows. If both are set, all windows are merged.
                 properties:
                   days:
                     description: |-
@@ -95,6 +91,40 @@ spec:
                 - end
                 - start
                 type: object
+              schedules:
+                description: Schedules defines multiple sleep windows. Workloads sleep
+                  if ANY window matches.
+                items:
+                  description: SleepWindow defines the time window for sleeping
+                  properties:
+                    days:
+                      description: |-
+                        Days specifies which days the schedule applies (0=Sunday, 6=Saturday)
+                        If empty, applies every day
+                      items:
+                        type: integer
+                      maxItems: 7
+                      type: array
+                    end:
+                      description: End is the time to wake up (cron format for time,
+                        e.g., "06:00")
+                      pattern: ^([01]?[0-9]|2[0-3]):[0-5][0-9]$
+                      type: string
+                    start:
+                      description: Start is the time to start sleeping (cron format
+                        for time, e.g., "22:00")
+                      pattern: ^([01]?[0-9]|2[0-3]):[0-5][0-9]$
+                      type: string
+                    timezone:
+                      description: |-
+                        Timezone is the timezone for the schedule (e.g., "Europe/Paris", "UTC")
+                        Defaults to UTC if not specified.
+                      type: string
+                  required:
+                  - end
+                  - start
+                  type: object
+                type: array
               selector:
                 description: Selector specifies which workloads to target
                 properties:
@@ -122,7 +152,6 @@ spec:
                   If workloads are currently sleeping, they will be woken up.
                 type: boolean
             required:
-            - schedule
             - selector
             type: object
           status:

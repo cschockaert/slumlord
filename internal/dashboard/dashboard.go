@@ -155,15 +155,18 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 			Namespace:        sched.Namespace,
 			Name:             sched.Name,
 			Sleeping:         sched.Status.Sleeping,
-			Start:            sched.Spec.Schedule.Start,
-			End:              sched.Spec.Schedule.End,
-			Timezone:         sched.Spec.Schedule.Timezone,
-			Days:             sched.Spec.Schedule.Days,
 			DaysDisplay:      sched.Status.DaysDisplay,
 			ManagedWorkloads: sched.Status.ManagedWorkloads,
 			MatchLabels:      sched.Spec.Selector.MatchLabels,
 			MatchNames:       sched.Spec.Selector.MatchNames,
 			Types:            sched.Spec.Selector.Types,
+		}
+		// Populate Start/End/Timezone/Days from the first window for backward compatibility
+		if windows := sched.Spec.GetWindows(); len(windows) > 0 {
+			sr.Start = windows[0].Start
+			sr.End = windows[0].End
+			sr.Timezone = windows[0].Timezone
+			sr.Days = windows[0].Days
 		}
 		if sr.Timezone == "" {
 			sr.Timezone = "UTC"

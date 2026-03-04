@@ -14,8 +14,14 @@ type SlumlordSleepScheduleSpec struct {
 	// Selector specifies which workloads to target
 	Selector WorkloadSelector `json:"selector"`
 
-	// Schedule defines when workloads should sleep
-	Schedule SleepWindow `json:"schedule"`
+	// Schedule defines when workloads should sleep (single window).
+	// Use Schedules for multiple windows. If both are set, all windows are merged.
+	// +optional
+	Schedule *SleepWindow `json:"schedule,omitempty"`
+
+	// Schedules defines multiple sleep windows. Workloads sleep if ANY window matches.
+	// +optional
+	Schedules []SleepWindow `json:"schedules,omitempty"`
 
 	// ReconcileInterval overrides the default reconciliation interval.
 	// Controls how often the controller re-checks the schedule state.
@@ -114,8 +120,6 @@ type ManagedWorkload struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Suspended",type="boolean",JSONPath=".spec.suspend"
 // +kubebuilder:printcolumn:name="Sleeping",type="boolean",JSONPath=".status.sleeping"
-// +kubebuilder:printcolumn:name="Start",type="string",JSONPath=".spec.schedule.start"
-// +kubebuilder:printcolumn:name="End",type="string",JSONPath=".spec.schedule.end"
 // +kubebuilder:printcolumn:name="Days",type="string",JSONPath=".status.daysDisplay"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
@@ -135,6 +139,16 @@ type SlumlordSleepScheduleList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []SlumlordSleepSchedule `json:"items"`
+}
+
+// GetWindows returns all sleep windows from both Schedule and Schedules fields.
+func (s *SlumlordSleepScheduleSpec) GetWindows() []SleepWindow {
+	var windows []SleepWindow
+	if s.Schedule != nil {
+		windows = append(windows, *s.Schedule)
+	}
+	windows = append(windows, s.Schedules...)
+	return windows
 }
 
 func init() {

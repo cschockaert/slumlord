@@ -223,7 +223,7 @@ func TestShouldBeSleepingAt(t *testing.T) {
 			r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
 			schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
 				Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
-					Schedule: tt.schedule,
+					Schedule: &tt.schedule,
 				},
 			}
 
@@ -284,9 +284,9 @@ func TestShouldManageType(t *testing.T) {
 // neverSleepingSchedule returns a SleepWindow guaranteed to never be active,
 // regardless of when the test runs. It picks a day 3 days from now (UTC) so
 // it's never today or yesterday (overnight carry-over).
-func neverSleepingSchedule() slumlordv1alpha1.SleepWindow {
+func neverSleepingSchedule() *slumlordv1alpha1.SleepWindow {
 	neverDay := (int(time.Now().UTC().Weekday()) + 3) % 7
-	return slumlordv1alpha1.SleepWindow{
+	return &slumlordv1alpha1.SleepWindow{
 		Start:    "12:00",
 		End:      "12:01",
 		Timezone: "UTC",
@@ -378,7 +378,7 @@ func TestReconcile_ScalesDownDeployment(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Deployment"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -472,7 +472,7 @@ func TestReconcile_SuspendsCronJob(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"CronJob"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -543,7 +543,7 @@ func TestReconcile_HibernatesCNPGCluster(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Cluster"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -644,7 +644,7 @@ func TestReconcile_SuspendsFluxHelmRelease(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"HelmRelease"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -748,7 +748,7 @@ func TestReconcile_SuspendsFluxKustomization(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Kustomization"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -958,7 +958,7 @@ func TestReconcile_FullLifecycle(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Deployment"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -1073,7 +1073,7 @@ func TestReconcile_IdempotentSleep(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Deployment"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -1180,7 +1180,7 @@ func TestReconcile_ScalesDownStatefulSet(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"StatefulSet"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -1602,7 +1602,7 @@ func TestReconcile_ScalesDownThanosRuler(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"ThanosRuler"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
+			Schedule: &slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
 		},
 	}
 
@@ -1676,7 +1676,7 @@ func TestReconcile_ScalesDownAlertmanager(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Alertmanager"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
+			Schedule: &slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
 		},
 	}
 
@@ -1744,7 +1744,7 @@ func TestReconcile_ScalesDownPrometheus(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Prometheus"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
+			Schedule: &slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
 		},
 	}
 
@@ -2014,7 +2014,7 @@ func TestReconcile_SuspendsMariaDB(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"MariaDB"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
+			Schedule: &slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
 		},
 	}
 
@@ -2154,7 +2154,7 @@ func TestReconcile_SuspendsMaxScale(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"MaxScale"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
+			Schedule: &slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
 		},
 	}
 
@@ -2320,7 +2320,7 @@ func TestTimeUntilNextTransition(t *testing.T) {
 	r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
 	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
 		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "22:00",
 				End:      "06:00",
 				Timezone: "UTC",
@@ -2354,7 +2354,7 @@ func TestComputeRequeueInterval(t *testing.T) {
 	r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
 	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
 		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "22:00",
 				End:      "06:00",
 				Timezone: "UTC",
@@ -2495,7 +2495,7 @@ func TestSuspend_WhenAwake(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Deployment"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -2587,7 +2587,7 @@ func TestSuspend_WhenSleeping(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Deployment"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -2691,7 +2691,7 @@ func TestUnsuspend_ResumesSchedule(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Deployment"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -2767,7 +2767,7 @@ func TestSleepSchedule_ComputeRequeueInterval(t *testing.T) {
 	makeSchedule := func(interval *metav1.Duration) *slumlordv1alpha1.SlumlordSleepSchedule {
 		return &slumlordv1alpha1.SlumlordSleepSchedule{
 			Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
-				Schedule: slumlordv1alpha1.SleepWindow{
+				Schedule: &slumlordv1alpha1.SleepWindow{
 					Start:    "22:00",
 					End:      "06:00",
 					Timezone: "UTC",
@@ -2859,7 +2859,7 @@ func TestReconcile_ScalesDownElasticsearch(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Elasticsearch"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
+			Schedule: &slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
 		},
 	}
 
@@ -3033,7 +3033,7 @@ func TestReconcile_ScalesDownKibana(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Kibana"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
+			Schedule: &slumlordv1alpha1.SleepWindow{Start: "00:00", End: "23:59", Timezone: "UTC"},
 		},
 	}
 
@@ -3204,7 +3204,7 @@ func TestReconcile_SleepRetryPreservesManagedWorkloads(t *testing.T) {
 				MatchLabels: map[string]string{"app": "test"},
 				Types:       []string{"Deployment"},
 			},
-			Schedule: slumlordv1alpha1.SleepWindow{
+			Schedule: &slumlordv1alpha1.SleepWindow{
 				Start:    "00:00",
 				End:      "23:59",
 				Timezone: "UTC",
@@ -3281,4 +3281,322 @@ func TestReconcile_SleepRetryPreservesManagedWorkloads(t *testing.T) {
 	if managed["deploy-b"] == nil || *managed["deploy-b"] != 3 {
 		t.Errorf("Expected deploy-b originalReplicas = 3, got %v", managed["deploy-b"])
 	}
+}
+
+func TestGetWindows(t *testing.T) {
+	tests := []struct {
+		name      string
+		schedule  *slumlordv1alpha1.SleepWindow
+		schedules []slumlordv1alpha1.SleepWindow
+		wantCount int
+	}{
+		{
+			name:      "schedule only",
+			schedule:  &slumlordv1alpha1.SleepWindow{Start: "22:00", End: "06:00"},
+			wantCount: 1,
+		},
+		{
+			name: "schedules only",
+			schedules: []slumlordv1alpha1.SleepWindow{
+				{Start: "22:00", End: "06:00"},
+				{Start: "12:00", End: "13:00"},
+			},
+			wantCount: 2,
+		},
+		{
+			name:     "both schedule and schedules",
+			schedule: &slumlordv1alpha1.SleepWindow{Start: "22:00", End: "06:00"},
+			schedules: []slumlordv1alpha1.SleepWindow{
+				{Start: "12:00", End: "13:00"},
+			},
+			wantCount: 2,
+		},
+		{
+			name:      "neither set",
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := slumlordv1alpha1.SlumlordSleepScheduleSpec{
+				Schedule:  tt.schedule,
+				Schedules: tt.schedules,
+			}
+			got := spec.GetWindows()
+			if len(got) != tt.wantCount {
+				t.Errorf("GetWindows() returned %d windows, want %d", len(got), tt.wantCount)
+			}
+		})
+	}
+}
+
+func TestShouldBeSleepingAt_MultiWindow(t *testing.T) {
+	tests := []struct {
+		name      string
+		schedule  *slumlordv1alpha1.SleepWindow
+		schedules []slumlordv1alpha1.SleepWindow
+		now       time.Time
+		want      bool
+	}{
+		{
+			name: "inside first window",
+			schedules: []slumlordv1alpha1.SleepWindow{
+				{Start: "22:00", End: "06:00", Timezone: "UTC"},
+				{Start: "12:00", End: "13:00", Timezone: "UTC"},
+			},
+			now:  time.Date(2024, 1, 15, 23, 0, 0, 0, time.UTC),
+			want: true,
+		},
+		{
+			name: "inside second window",
+			schedules: []slumlordv1alpha1.SleepWindow{
+				{Start: "22:00", End: "06:00", Timezone: "UTC"},
+				{Start: "12:00", End: "13:00", Timezone: "UTC"},
+			},
+			now:  time.Date(2024, 1, 15, 12, 30, 0, 0, time.UTC),
+			want: true,
+		},
+		{
+			name: "outside all windows",
+			schedules: []slumlordv1alpha1.SleepWindow{
+				{Start: "22:00", End: "06:00", Timezone: "UTC"},
+				{Start: "12:00", End: "13:00", Timezone: "UTC"},
+			},
+			now:  time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+			want: false,
+		},
+		{
+			name: "overlapping windows",
+			schedules: []slumlordv1alpha1.SleepWindow{
+				{Start: "08:00", End: "14:00", Timezone: "UTC"},
+				{Start: "12:00", End: "18:00", Timezone: "UTC"},
+			},
+			now:  time.Date(2024, 1, 15, 13, 0, 0, 0, time.UTC),
+			want: true,
+		},
+		{
+			name:     "schedule + schedules combined",
+			schedule: &slumlordv1alpha1.SleepWindow{Start: "22:00", End: "06:00", Timezone: "UTC"},
+			schedules: []slumlordv1alpha1.SleepWindow{
+				{Start: "12:00", End: "13:00", Timezone: "UTC"},
+			},
+			now:  time.Date(2024, 1, 15, 12, 30, 0, 0, time.UTC),
+			want: true,
+		},
+		{
+			name: "weekday nightly + weekend all-day",
+			schedules: []slumlordv1alpha1.SleepWindow{
+				{Start: "20:00", End: "07:00", Timezone: "UTC", Days: []int{1, 2, 3, 4, 5}},
+				{Start: "00:01", End: "23:59", Timezone: "UTC", Days: []int{0, 6}},
+			},
+			now:  time.Date(2024, 1, 14, 15, 0, 0, 0, time.UTC), // Sunday 15:00
+			want: true,
+		},
+		{
+			name: "weekday nightly + weekend - outside both",
+			schedules: []slumlordv1alpha1.SleepWindow{
+				{Start: "20:00", End: "07:00", Timezone: "UTC", Days: []int{1, 2, 3, 4, 5}},
+				{Start: "00:01", End: "23:59", Timezone: "UTC", Days: []int{0, 6}},
+			},
+			now:  time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC), // Monday 12:00
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
+			schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+				Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+					Schedule:  tt.schedule,
+					Schedules: tt.schedules,
+				},
+			}
+
+			got := r.shouldBeSleepingAt(schedule, tt.now)
+			if got != tt.want {
+				t.Errorf("shouldBeSleepingAt() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAggregateDaysDisplay(t *testing.T) {
+	tests := []struct {
+		name    string
+		windows []slumlordv1alpha1.SleepWindow
+		want    string
+	}{
+		{
+			name: "any window with empty days returns Every day",
+			windows: []slumlordv1alpha1.SleepWindow{
+				{Days: []int{1, 2, 3}},
+				{Days: nil},
+			},
+			want: "Every day",
+		},
+		{
+			name: "merged unique days",
+			windows: []slumlordv1alpha1.SleepWindow{
+				{Days: []int{1, 2, 3, 4, 5}},
+				{Days: []int{0, 6}},
+			},
+			want: "Sun-Sat",
+		},
+		{
+			name: "overlapping days deduplicated",
+			windows: []slumlordv1alpha1.SleepWindow{
+				{Days: []int{1, 2, 3}},
+				{Days: []int{3, 4, 5}},
+			},
+			want: "Mon-Fri",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := aggregateDaysDisplay(tt.windows)
+			if got != tt.want {
+				t.Errorf("aggregateDaysDisplay() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReconcile_MultiWindowSchedule(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	replicas := int32(3)
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-deploy",
+			Namespace: namespace,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "test"},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{"app": "test"},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{Name: "test", Image: "nginx"},
+					},
+				},
+			},
+		},
+	}
+
+	// Create schedule with multiple windows — both always-active to ensure sleep triggers
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-multi-window",
+			Namespace: namespace,
+		},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Schedules: []slumlordv1alpha1.SleepWindow{
+				{Start: "00:00", End: "12:00", Timezone: "UTC"},
+				{Start: "12:01", End: "23:59", Timezone: "UTC"},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deploy, schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      schedule.Name,
+			Namespace: schedule.Namespace,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	// Verify deployment scaled to 0
+	var updatedDeploy appsv1.Deployment
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}, &updatedDeploy); err != nil {
+		t.Fatalf("Failed to get deployment: %v", err)
+	}
+	if *updatedDeploy.Spec.Replicas != 0 {
+		t.Errorf("Expected replicas = 0, got %d", *updatedDeploy.Spec.Replicas)
+	}
+
+	// Verify status
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if !updatedSchedule.Status.Sleeping {
+		t.Error("Expected status.sleeping = true")
+	}
+}
+
+func TestReconcile_NoWindowsDefined(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// Schedule with neither schedule nor schedules set
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-no-windows",
+			Namespace: namespace,
+		},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+
+	result, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      schedule.Name,
+			Namespace: schedule.Namespace,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.RequeueAfter != 1*time.Minute {
+		t.Errorf("Expected requeue after 1m, got %v", result.RequeueAfter)
+	}
+
+	// Verify degraded condition
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	for _, c := range updatedSchedule.Status.Conditions {
+		if c.Type == "Ready" && c.Reason == "InvalidSpec" {
+			return // success
+		}
+	}
+	t.Error("Expected Ready condition with reason InvalidSpec")
 }
