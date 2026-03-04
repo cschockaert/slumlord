@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-03-04
+
 ### Added
 
 - Support multiple sleep windows per schedule via `spec.schedules` (#63)
@@ -249,7 +251,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.13.1...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.14.0...HEAD
+[2.14.0]: https://github.com/cschockaert/slumlord/compare/v2.13.1...v2.14.0
 [2.13.1]: https://github.com/cschockaert/slumlord/compare/v2.13.0...v2.13.1
 [2.13.0]: https://github.com/cschockaert/slumlord/compare/v2.12.1...v2.13.0
 [2.12.1]: https://github.com/cschockaert/slumlord/compare/v2.12.0...v2.12.1
