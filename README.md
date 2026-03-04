@@ -31,7 +31,7 @@ Kubernetes operator for cost optimization -- automatically scales down workloads
 ### Helm (recommended)
 
 ```bash
-helm install slumlord oci://ghcr.io/cschockaert/charts/slumlord --version 2.14.0
+helm install slumlord oci://ghcr.io/cschockaert/charts/slumlord --version 2.14.1
 ```
 
 ### From source

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.1] - 2026-03-04
+
+### Changed
+
+- Bump k8s.io/api, k8s.io/apimachinery, k8s.io/client-go, k8s.io/metrics from 0.35.1 to 0.35.2
+
 ## [2.14.0] - 2026-03-04
 
 ### Added
@@ -251,7 +257,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.14.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.14.1...HEAD
+[2.14.1]: https://github.com/cschockaert/slumlord/compare/v2.14.0...v2.14.1
 [2.14.0]: https://github.com/cschockaert/slumlord/compare/v2.13.1...v2.14.0
 [2.13.1]: https://github.com/cschockaert/slumlord/compare/v2.13.0...v2.13.1
 [2.13.0]: https://github.com/cschockaert/slumlord/compare/v2.12.1...v2.13.0
