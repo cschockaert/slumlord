@@ -55,7 +55,7 @@ func TestOverviewWithSchedules(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "sched1", Namespace: "ns1"},
 			Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
 				Selector: slumlordv1alpha1.WorkloadSelector{Types: []string{"Deployment"}},
-				Schedule: slumlordv1alpha1.SleepWindow{Start: "22:00", End: "06:00"},
+				Schedule: &slumlordv1alpha1.SleepWindow{Start: "22:00", End: "06:00"},
 			},
 			Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
 				Sleeping: true,
@@ -69,7 +69,7 @@ func TestOverviewWithSchedules(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "sched2", Namespace: "ns2"},
 			Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
 				Selector: slumlordv1alpha1.WorkloadSelector{Types: []string{"StatefulSet"}},
-				Schedule: slumlordv1alpha1.SleepWindow{Start: "20:00", End: "08:00"},
+				Schedule: &slumlordv1alpha1.SleepWindow{Start: "20:00", End: "08:00"},
 			},
 			Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
 				Sleeping: false,
@@ -116,7 +116,7 @@ func TestSchedulesEndpoint(t *testing.T) {
 					MatchLabels: map[string]string{"env": "dev"},
 					Types:       []string{"Deployment"},
 				},
-				Schedule: slumlordv1alpha1.SleepWindow{
+				Schedule: &slumlordv1alpha1.SleepWindow{
 					Start:    "22:00",
 					End:      "06:00",
 					Timezone: "Europe/Paris",

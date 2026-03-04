@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Support multiple sleep windows per schedule via `spec.schedules` (#63)
+- Workloads sleep if ANY window matches the current time
+- `spec.schedule` (singular) remains supported for backward compatibility
+- Validation: degraded condition when neither `schedule` nor `schedules` is set
+
 ## [2.13.1] - 2026-03-03
 
 ### Fixed

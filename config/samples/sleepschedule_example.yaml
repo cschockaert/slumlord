@@ -61,6 +61,31 @@ spec:
     timezone: "Europe/Paris"
     days: [1, 2, 3, 4, 5]
 ---
+# Example: Multi-window schedule — nightly + weekends in a single resource
+# This replaces the need for two separate SlumlordSleepSchedule resources.
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordSleepSchedule
+metadata:
+  name: nightly-and-weekends
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - Deployment
+      - StatefulSet
+      - CronJob
+  schedules:
+    - start: "20:00"
+      end: "07:00"
+      timezone: "Europe/Paris"
+      days: [1, 2, 3, 4, 5]  # Weekday nights
+    - start: "00:01"
+      end: "23:59"
+      timezone: "Europe/Paris"
+      days: [0, 6]            # Full weekends
+---
 # Example: Suspend FluxCD reconciliation during off-hours
 # IMPORTANT: Use this alongside workload sleep schedules to prevent
 # Flux from restoring scaled-down workloads during sleep windows

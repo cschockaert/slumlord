@@ -182,10 +182,21 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Determine if we should be sleeping
 	now := time.Now()
+
+	// Validate that at least one window is defined
+	windows := schedule.Spec.GetWindows()
+	if len(windows) == 0 {
+		r.setScheduleCondition(&schedule, metav1.ConditionFalse, "InvalidSpec", "No sleep window defined: set spec.schedule or spec.schedules")
+		if err := r.Status().Update(ctx, &schedule); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
+	}
+
 	shouldSleep := r.shouldBeSleepingAt(&schedule, now)
 
-	// Compute human-readable days display
-	daysDisplay := daysToDisplay(schedule.Spec.Schedule.Days)
+	// Compute human-readable days display (aggregate from all windows)
+	daysDisplay := aggregateDaysDisplay(windows)
 	statusChanged := shouldSleep != schedule.Status.Sleeping
 	daysChanged := schedule.Status.DaysDisplay != daysDisplay
 
@@ -278,11 +289,22 @@ func (r *SleepScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
-// shouldBeSleepingAt determines if workloads should be sleeping at a specific time
+// shouldBeSleepingAt determines if workloads should be sleeping at a specific time.
+// Returns true if ANY window matches.
 func (r *SleepScheduleReconciler) shouldBeSleepingAt(schedule *slumlordv1alpha1.SlumlordSleepSchedule, t time.Time) bool {
+	for _, w := range schedule.Spec.GetWindows() {
+		if shouldBeSleepingAtWindow(w, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldBeSleepingAtWindow checks if the given time falls within a single sleep window.
+func shouldBeSleepingAtWindow(window slumlordv1alpha1.SleepWindow, t time.Time) bool {
 	loc := time.UTC
-	if schedule.Spec.Schedule.Timezone != "" {
-		if l, err := time.LoadLocation(schedule.Spec.Schedule.Timezone); err == nil {
+	if window.Timezone != "" {
+		if l, err := time.LoadLocation(window.Timezone); err == nil {
 			loc = l
 		}
 	}
@@ -290,11 +312,11 @@ func (r *SleepScheduleReconciler) shouldBeSleepingAt(schedule *slumlordv1alpha1.
 	now := t.In(loc)
 
 	// Parse start and end times first (needed for overnight day-check logic)
-	startTime, err := time.ParseInLocation("15:04", schedule.Spec.Schedule.Start, loc)
+	startTime, err := time.ParseInLocation("15:04", window.Start, loc)
 	if err != nil {
 		return false
 	}
-	endTime, err := time.ParseInLocation("15:04", schedule.Spec.Schedule.End, loc)
+	endTime, err := time.ParseInLocation("15:04", window.End, loc)
 	if err != nil {
 		return false
 	}
@@ -308,7 +330,7 @@ func (r *SleepScheduleReconciler) shouldBeSleepingAt(schedule *slumlordv1alpha1.
 	// Check if the relevant day is in the allowed days.
 	// For overnight schedules, the sleep window belongs to the day it STARTED.
 	// So at 3AM Tuesday (early morning portion), we check Monday (previous day).
-	if len(schedule.Spec.Schedule.Days) > 0 {
+	if len(window.Days) > 0 {
 		checkDay := int(now.Weekday())
 		if isOvernight && now.Before(endTime) {
 			// We're in the early morning portion of an overnight schedule.
@@ -316,7 +338,7 @@ func (r *SleepScheduleReconciler) shouldBeSleepingAt(schedule *slumlordv1alpha1.
 			checkDay = (checkDay + 6) % 7 // equivalent to (checkDay - 1 + 7) % 7
 		}
 		dayAllowed := false
-		for _, d := range schedule.Spec.Schedule.Days {
+		for _, d := range window.Days {
 			if d == checkDay {
 				dayAllowed = true
 				break
@@ -1254,6 +1276,24 @@ func daysToDisplay(days []int) string {
 		}
 	}
 	return strings.Join(parts, ",")
+}
+
+// aggregateDaysDisplay merges days from all windows and returns a single display string.
+func aggregateDaysDisplay(windows []slumlordv1alpha1.SleepWindow) string {
+	seen := make(map[int]bool)
+	for _, w := range windows {
+		if len(w.Days) == 0 {
+			return "Every day"
+		}
+		for _, d := range w.Days {
+			seen[d] = true
+		}
+	}
+	merged := make([]int, 0, len(seen))
+	for d := range seen {
+		merged = append(merged, d)
+	}
+	return daysToDisplay(merged)
 }
 
 // setScheduleCondition sets the Ready condition on a SlumlordSleepSchedule.

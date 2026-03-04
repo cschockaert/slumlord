@@ -869,7 +869,18 @@ func (in *SlumlordSleepScheduleList) DeepCopyObject() runtime.Object {
 func (in *SlumlordSleepScheduleSpec) DeepCopyInto(out *SlumlordSleepScheduleSpec) {
 	*out = *in
 	in.Selector.DeepCopyInto(&out.Selector)
-	in.Schedule.DeepCopyInto(&out.Schedule)
+	if in.Schedule != nil {
+		in, out := &in.Schedule, &out.Schedule
+		*out = new(SleepWindow)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.Schedules != nil {
+		in, out := &in.Schedules, &out.Schedules
+		*out = make([]SleepWindow, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.ReconcileInterval != nil {
 		in, out := &in.ReconcileInterval, &out.ReconcileInterval
 		*out = new(v1.Duration)
