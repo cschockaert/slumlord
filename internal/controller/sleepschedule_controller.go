@@ -1280,19 +1280,14 @@ func daysToDisplay(days []int) string {
 
 // aggregateDaysDisplay merges days from all windows and returns a single display string.
 func aggregateDaysDisplay(windows []slumlordv1alpha1.SleepWindow) string {
-	allEveryDay := true
 	seen := make(map[int]bool)
 	for _, w := range windows {
 		if len(w.Days) == 0 {
 			return "Every day"
 		}
-		allEveryDay = false
 		for _, d := range w.Days {
 			seen[d] = true
 		}
-	}
-	if allEveryDay {
-		return "Every day"
 	}
 	merged := make([]int, 0, len(seen))
 	for d := range seen {
