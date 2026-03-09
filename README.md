@@ -176,6 +176,29 @@ spec:
 
 > **Important**: Like FluxCD, the MariaDB Operator's `spec.suspend` pauses its reconciliation loop. Suspend the operator before scaling down underlying workloads, and resume it after restoring them. This prevents the operator from recreating resources during the sleep window.
 
+### ECK Elasticsearch & Kibana
+
+```yaml
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordSleepSchedule
+metadata:
+  name: elastic-sleep
+spec:
+  selector:
+    matchLabels:
+      slumlord.io/managed: "true"
+    types:
+      - Elasticsearch
+      - Kibana
+  schedule:
+    start: "21:55"
+    end: "06:05"
+    timezone: Europe/Paris
+    days: [1, 2, 3, 4, 5]
+```
+
+> **Note**: Elasticsearch sleep sets all `spec.nodeSets[].count` to 0 and stores original counts for restoration. Kibana sleep sets `spec.count` to 0. Like the Prometheus Operator, the ECK operator itself should NOT be scaled down -- it must be running to reconcile resources back up on wake. Use a wider sleep window than Deployment schedules if managing both.
+
 ### Idle detection -- alert mode
 
 ```yaml
