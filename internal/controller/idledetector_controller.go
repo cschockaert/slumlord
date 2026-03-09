@@ -494,17 +494,36 @@ func computeUsagePercent(pods []corev1.Pod, podMetrics []metricsv1beta1.PodMetri
 		podNames[p.Name] = true
 	}
 
-	// Aggregate requests from pod specs
+	// Aggregate requests from pod specs (accounting for init containers like kube-scheduler)
 	var totalCPUReq, totalMemReq resource.Quantity
 	for _, pod := range pods {
+		var cpu, mem resource.Quantity
 		for _, c := range pod.Spec.Containers {
 			if req, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-				totalCPUReq.Add(req)
+				cpu.Add(req)
 			}
 			if req, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-				totalMemReq.Add(req)
+				mem.Add(req)
 			}
 		}
+		// Init containers: kube-scheduler takes max(sum(init), sum(regular))
+		var initCPU, initMem resource.Quantity
+		for _, c := range pod.Spec.InitContainers {
+			if req, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+				initCPU.Add(req)
+			}
+			if req, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+				initMem.Add(req)
+			}
+		}
+		if initCPU.Cmp(cpu) > 0 {
+			cpu = initCPU
+		}
+		if initMem.Cmp(mem) > 0 {
+			mem = initMem
+		}
+		totalCPUReq.Add(cpu)
+		totalMemReq.Add(mem)
 	}
 
 	// No requests = can't compute percentage
