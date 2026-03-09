@@ -250,9 +250,9 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 		r.Recorder.Eventf(&policy, nil, corev1.EventTypeNormal, "DrainStarted", "DrainNode", "Started draining node %s", candidate.name)
 
-		// Evict pods
+		// Evict pods (best-effort: continue on individual failures)
 		podsEvicted := int32(0)
-		evictionFailed := false
+		evictionErrors := 0
 		for i := range candidate.drainablePods {
 			pod := &candidate.drainablePods[i]
 			if err := r.evictPodForDrain(ctx, pod, policy.Spec.Drain.GracePeriodSeconds); err != nil {
@@ -260,27 +260,16 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 					continue // pod already gone
 				}
 				logger.Error(err, "Failed to evict pod", "pod", pod.Name, "namespace", pod.Namespace)
-				evictionFailed = true
-				break
+				evictionErrors++
+				continue
 			}
 			podsEvicted++
 		}
 
 		result.PodsEvicted = podsEvicted
 
-		if evictionFailed {
-			// Wait for drain with timeout, then uncordon if it fails
-			if !r.waitForDrain(ctx, candidate.name, time.Duration(timeoutSeconds)*time.Second) {
-				logger.Info("Drain timed out, uncordoning", "node", candidate.name)
-				if uncordonErr := r.uncordonNode(ctx, candidate.name); uncordonErr != nil {
-					logger.Error(uncordonErr, "Failed to uncordon node after timeout", "node", candidate.name)
-				}
-				result.Action = "failed"
-				result.Reason = "eviction failed and drain timed out"
-				runStatus.NodeResults = append(runStatus.NodeResults, result)
-				r.Recorder.Eventf(&policy, nil, corev1.EventTypeWarning, "DrainFailed", "DrainNode", "Failed to drain node %s: eviction error", candidate.name)
-				continue
-			}
+		if evictionErrors > 0 {
+			logger.Info("Some pod evictions failed", "node", candidate.name, "evicted", podsEvicted, "errors", evictionErrors)
 		}
 
 		// Wait for drain to complete
@@ -290,7 +279,11 @@ func (r *NodeDrainPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				logger.Error(uncordonErr, "Failed to uncordon node after timeout", "node", candidate.name)
 			}
 			result.Action = "failed"
-			result.Reason = "drain timed out"
+			if evictionErrors > 0 {
+				result.Reason = fmt.Sprintf("eviction failed for %d pods and drain timed out", evictionErrors)
+			} else {
+				result.Reason = "drain timed out"
+			}
 			runStatus.NodeResults = append(runStatus.NodeResults, result)
 			r.Recorder.Eventf(&policy, nil, corev1.EventTypeWarning, "DrainFailed", "DrainNode", "Drain timed out for node %s", candidate.name)
 			continue
