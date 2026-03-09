@@ -3600,3 +3600,216 @@ func TestReconcile_NoWindowsDefined(t *testing.T) {
 	}
 	t.Error("Expected Ready condition with reason InvalidSpec")
 }
+
+// --- DST and boundary edge case tests ---
+
+func TestShouldBeSleepingAt_DSTSpringForward(t *testing.T) {
+	// Europe/Paris springs forward on last Sunday of March: 02:00 → 03:00
+	// 2024-03-31 is the spring forward date
+	paris, _ := time.LoadLocation("Europe/Paris")
+
+	r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
+
+	tests := []struct {
+		name string
+		now  time.Time
+		want bool
+	}{
+		{
+			name: "before DST gap - 01:30 CET is in window (22:00-06:00)",
+			now:  time.Date(2024, 3, 31, 0, 30, 0, 0, time.UTC), // 01:30 CET
+			want: true,
+		},
+		{
+			name: "after DST gap - 03:30 CEST is in window (22:00-06:00)",
+			now:  time.Date(2024, 3, 31, 1, 30, 0, 0, time.UTC), // 03:30 CEST
+			want: true,
+		},
+		{
+			name: "after wake time - 07:00 CEST is not in window",
+			now:  time.Date(2024, 3, 31, 5, 0, 0, 0, time.UTC), // 07:00 CEST
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+				Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+					Schedule: &slumlordv1alpha1.SleepWindow{
+						Start:    "22:00",
+						End:      "06:00",
+						Timezone: paris.String(),
+					},
+				},
+			}
+			got := r.shouldBeSleepingAt(schedule, tt.now)
+			if got != tt.want {
+				t.Errorf("shouldBeSleepingAt() = %v, want %v (now=%v)", got, tt.want, tt.now)
+			}
+		})
+	}
+}
+
+func TestShouldBeSleepingAt_DSTFallBack(t *testing.T) {
+	// Europe/Paris falls back on last Sunday of October: 03:00 → 02:00
+	// 2024-10-27 is the fall back date
+	paris, _ := time.LoadLocation("Europe/Paris")
+
+	r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
+
+	tests := []struct {
+		name string
+		now  time.Time
+		want bool
+	}{
+		{
+			name: "before fall back - 02:30 CEST is in window (22:00-06:00)",
+			now:  time.Date(2024, 10, 27, 0, 30, 0, 0, time.UTC), // 02:30 CEST
+			want: true,
+		},
+		{
+			name: "after fall back - 02:30 CET is still in window",
+			now:  time.Date(2024, 10, 27, 1, 30, 0, 0, time.UTC), // 02:30 CET
+			want: true,
+		},
+		{
+			name: "after wake time - 07:00 CET is not in window",
+			now:  time.Date(2024, 10, 27, 6, 0, 0, 0, time.UTC), // 07:00 CET
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+				Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+					Schedule: &slumlordv1alpha1.SleepWindow{
+						Start:    "22:00",
+						End:      "06:00",
+						Timezone: paris.String(),
+					},
+				},
+			}
+			got := r.shouldBeSleepingAt(schedule, tt.now)
+			if got != tt.want {
+				t.Errorf("shouldBeSleepingAt() = %v, want %v (now=%v)", got, tt.want, tt.now)
+			}
+		})
+	}
+}
+
+func TestShouldBeSleepingAt_BoundaryPrecision(t *testing.T) {
+	r := &SleepScheduleReconciler{Recorder: events.NewFakeRecorder(10)}
+
+	tests := []struct {
+		name string
+		now  time.Time
+		want bool
+	}{
+		{
+			name: "one minute after start - should sleep",
+			now:  time.Date(2024, 1, 15, 22, 1, 0, 0, time.UTC),
+			want: true,
+		},
+		{
+			name: "one minute before end - should sleep",
+			now:  time.Date(2024, 1, 16, 5, 59, 0, 0, time.UTC),
+			want: true,
+		},
+		{
+			name: "exact start - should NOT sleep",
+			now:  time.Date(2024, 1, 15, 22, 0, 0, 0, time.UTC),
+			want: false,
+		},
+		{
+			name: "exact end - should NOT sleep",
+			now:  time.Date(2024, 1, 16, 6, 0, 0, 0, time.UTC),
+			want: false,
+		},
+		{
+			name: "one minute after end - should NOT sleep",
+			now:  time.Date(2024, 1, 16, 6, 1, 0, 0, time.UTC),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+				Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+					Schedule: &slumlordv1alpha1.SleepWindow{
+						Start:    "22:00",
+						End:      "06:00",
+						Timezone: "UTC",
+					},
+				},
+			}
+			got := r.shouldBeSleepingAt(schedule, tt.now)
+			if got != tt.want {
+				t.Errorf("shouldBeSleepingAt() = %v, want %v (now=%v)", got, tt.want, tt.now)
+			}
+		})
+	}
+}
+
+func TestReconcile_WakeHandlesMissingWorkload(t *testing.T) {
+	// When a managed workload is deleted externally during sleep,
+	// wake should handle the missing workload gracefully (no crash).
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// Schedule is in wake mode (never sleeping) but has a managed workload that no longer exists
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-schedule",
+			Namespace: namespace,
+		},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Schedule: neverSleepingSchedule(),
+		},
+		Status: slumlordv1alpha1.SlumlordSleepScheduleStatus{
+			Sleeping: true,
+			ManagedWorkloads: []slumlordv1alpha1.ManagedWorkload{
+				{
+					Kind:             "Deployment",
+					Name:             "deleted-deploy", // This deployment no longer exists
+					OriginalReplicas: int32Ptr(3),
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(schedule).
+		WithStatusSubresource(schedule).
+		Build()
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+
+	// Reconcile should succeed without error (graceful handling of missing workload)
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      schedule.Name,
+			Namespace: schedule.Namespace,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v, expected graceful handling of missing workload", err)
+	}
+
+	// Verify schedule is no longer sleeping
+	var updatedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &updatedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if updatedSchedule.Status.Sleeping {
+		t.Error("Expected sleeping = false after wake with missing workload")
+	}
+}
