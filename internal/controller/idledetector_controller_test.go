@@ -2264,3 +2264,120 @@ func TestIdleDetector_ReconcileInterval(t *testing.T) {
 		})
 	}
 }
+
+func TestComputeUsagePercent_InitContainers(t *testing.T) {
+	tests := []struct {
+		name     string
+		pods     []corev1.Pod
+		metrics  []metricsv1beta1.PodMetrics
+		wantCPU  float64
+		wantMem  float64
+		wantData bool
+	}{
+		{
+			name: "init containers larger than regular - uses init requests",
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pod-1", Namespace: "ns"},
+					Spec: corev1.PodSpec{
+						InitContainers: []corev1.Container{
+							{
+								Name: "init",
+								Resources: corev1.ResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceCPU:    resource.MustParse("2000m"),
+										corev1.ResourceMemory: resource.MustParse("2Gi"),
+									},
+								},
+							},
+						},
+						Containers: []corev1.Container{
+							{
+								Name: "app",
+								Resources: corev1.ResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceCPU:    resource.MustParse("500m"),
+										corev1.ResourceMemory: resource.MustParse("512Mi"),
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{Phase: corev1.PodRunning},
+				},
+			},
+			metrics: []metricsv1beta1.PodMetrics{
+				*makePodMetrics("pod-1", "ns", "100m", "256Mi"),
+			},
+			wantCPU:  5,    // 100m / 2000m = 5%
+			wantMem:  12.5, // 256Mi / 2048Mi = 12.5%
+			wantData: true,
+		},
+		{
+			name: "init containers smaller than regular - uses regular requests",
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pod-1", Namespace: "ns"},
+					Spec: corev1.PodSpec{
+						InitContainers: []corev1.Container{
+							{
+								Name: "init",
+								Resources: corev1.ResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceCPU:    resource.MustParse("100m"),
+										corev1.ResourceMemory: resource.MustParse("64Mi"),
+									},
+								},
+							},
+						},
+						Containers: []corev1.Container{
+							{
+								Name: "app",
+								Resources: corev1.ResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceCPU:    resource.MustParse("1000m"),
+										corev1.ResourceMemory: resource.MustParse("1Gi"),
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{Phase: corev1.PodRunning},
+				},
+			},
+			metrics: []metricsv1beta1.PodMetrics{
+				*makePodMetrics("pod-1", "ns", "50m", "100Mi"),
+			},
+			wantCPU:  5,        // 50m / 1000m = 5%
+			wantMem:  9.765625, // 100Mi / 1024Mi
+			wantData: true,
+		},
+		{
+			name: "no init containers - unchanged behavior",
+			pods: []corev1.Pod{*makePod("pod-1", "ns", "1000m", "1Gi")},
+			metrics: []metricsv1beta1.PodMetrics{
+				*makePodMetrics("pod-1", "ns", "50m", "100Mi"),
+			},
+			wantCPU:  5,
+			wantMem:  9.765625,
+			wantData: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cpuPct, memPct, hasData := computeUsagePercent(tt.pods, tt.metrics)
+			if hasData != tt.wantData {
+				t.Errorf("hasData = %v, want %v", hasData, tt.wantData)
+			}
+			if tt.wantData {
+				if diff := cpuPct - tt.wantCPU; diff > 0.1 || diff < -0.1 {
+					t.Errorf("cpuPct = %v, want %v", cpuPct, tt.wantCPU)
+				}
+				if diff := memPct - tt.wantMem; diff > 0.1 || diff < -0.1 {
+					t.Errorf("memPct = %v, want %v", memPct, tt.wantMem)
+				}
+			}
+		})
+	}
+}
