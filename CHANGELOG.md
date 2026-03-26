@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.2] - 2026-03-26
+
+### Fixed
+
+- Persist `managedWorkloads` status after each individual workload update instead of per-type batch (#88, #95)
+- Prevents loss of already-scaled deployments when a conflict error occurs mid-section
+- Add `events.k8s.io` API group to RBAC ClusterRole and Role (#87)
+
 ## [2.14.1] - 2026-03-04
 
 ### Changed
@@ -257,7 +265,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.14.1...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.14.2...HEAD
+[2.14.2]: https://github.com/cschockaert/slumlord/compare/v2.14.1...v2.14.2
 [2.14.1]: https://github.com/cschockaert/slumlord/compare/v2.14.0...v2.14.1
 [2.14.0]: https://github.com/cschockaert/slumlord/compare/v2.13.1...v2.14.0
 [2.13.1]: https://github.com/cschockaert/slumlord/compare/v2.13.0...v2.13.1
