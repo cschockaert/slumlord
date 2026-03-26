@@ -3,12 +3,15 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -21,6 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	slumlordv1alpha1 "github.com/cschockaert/slumlord/api/v1alpha1"
 )
@@ -3811,5 +3815,163 @@ func TestReconcile_WakeHandlesMissingWorkload(t *testing.T) {
 	}
 	if updatedSchedule.Status.Sleeping {
 		t.Error("Expected sleeping = false after wake with missing workload")
+	}
+}
+
+func TestSleepWorkloads_PersistsStatusPerWorkload(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme()
+	namespace := "test-namespace"
+
+	// Create 4 deployments with 3 replicas each
+	var deployments []client.Object
+	for i := 1; i <= 4; i++ {
+		replicas := int32(3)
+		deploy := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("deploy-%d", i),
+				Namespace: namespace,
+				Labels:    map[string]string{"app": "test"},
+			},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &replicas,
+				Selector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "test"},
+				},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test"}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "test", Image: "nginx"}}},
+				},
+			},
+		}
+		deployments = append(deployments, deploy)
+	}
+
+	schedule := &slumlordv1alpha1.SlumlordSleepSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-schedule",
+			Namespace: namespace,
+		},
+		Spec: slumlordv1alpha1.SlumlordSleepScheduleSpec{
+			Selector: slumlordv1alpha1.WorkloadSelector{
+				MatchLabels: map[string]string{"app": "test"},
+				Types:       []string{"Deployment"},
+			},
+			Schedule: &slumlordv1alpha1.SleepWindow{
+				Start:    "00:00",
+				End:      "23:59",
+				Timezone: "UTC",
+			},
+		},
+	}
+
+	// Track deployment update calls; inject a conflict error on the 3rd deployment update.
+	// This simulates a real-world scenario where the workload update itself fails mid-loop.
+	var deployUpdateCount atomic.Int32
+	conflictErr := apierrors.NewConflict(
+		schema.GroupResource{Group: "apps", Resource: "deployments"},
+		"deploy-3", fmt.Errorf("the object has been modified"),
+	)
+
+	objects := append(deployments, schedule)
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithStatusSubresource(schedule).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if _, ok := obj.(*appsv1.Deployment); ok {
+					count := deployUpdateCount.Add(1)
+					if count == 3 {
+						return conflictErr
+					}
+				}
+				return c.Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	reconciler := newSleepReconciler(scheme, fakeClient)
+
+	// First attempt: sleepWorkloads should fail when updating the 3rd deployment
+	err := reconciler.sleepWorkloads(ctx, schedule)
+	if err == nil {
+		t.Fatal("Expected conflict error on 3rd deployment update, got nil")
+	}
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("Expected conflict error, got: %v", err)
+	}
+
+	// Verify: first 2 deployments should be persisted in status
+	var persistedSchedule slumlordv1alpha1.SlumlordSleepSchedule
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &persistedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule: %v", err)
+	}
+	if len(persistedSchedule.Status.ManagedWorkloads) != 2 {
+		t.Fatalf("Expected 2 managed workloads persisted before conflict, got %d", len(persistedSchedule.Status.ManagedWorkloads))
+	}
+
+	// Verify first 2 deployments are scaled to 0
+	for i := 1; i <= 2; i++ {
+		var d appsv1.Deployment
+		if err := fakeClient.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("deploy-%d", i), Namespace: namespace}, &d); err != nil {
+			t.Fatalf("Failed to get deploy-%d: %v", i, err)
+		}
+		if *d.Spec.Replicas != 0 {
+			t.Errorf("deploy-%d: expected replicas=0, got %d", i, *d.Spec.Replicas)
+		}
+	}
+
+	// Verify deploy-3 was NOT scaled (its update failed)
+	var d3 appsv1.Deployment
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "deploy-3", Namespace: namespace}, &d3); err != nil {
+		t.Fatalf("Failed to get deploy-3: %v", err)
+	}
+	if *d3.Spec.Replicas != 3 {
+		t.Errorf("deploy-3: expected replicas=3 (unchanged), got %d", *d3.Spec.Replicas)
+	}
+
+	// Now simulate retry: re-read the schedule from the API (as the controller would)
+	// and disable the error injection
+	deployUpdateCount.Store(100) // ensure no more conflict errors
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, schedule); err != nil {
+		t.Fatalf("Failed to re-read schedule: %v", err)
+	}
+
+	// Second attempt: should skip already-managed and process remaining deployments
+	err = reconciler.sleepWorkloads(ctx, schedule)
+	if err != nil {
+		t.Fatalf("Retry sleepWorkloads() error = %v", err)
+	}
+
+	// Re-read the schedule from the API after the retry
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, &persistedSchedule); err != nil {
+		t.Fatalf("Failed to get schedule after retry: %v", err)
+	}
+
+	// Verify all 4 deployments are now in managedWorkloads
+	if len(persistedSchedule.Status.ManagedWorkloads) != 4 {
+		t.Fatalf("Expected 4 managed workloads after retry, got %d", len(persistedSchedule.Status.ManagedWorkloads))
+	}
+
+	// Verify all deployments are scaled to 0
+	for i := 1; i <= 4; i++ {
+		var d appsv1.Deployment
+		if err := fakeClient.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("deploy-%d", i), Namespace: namespace}, &d); err != nil {
+			t.Fatalf("Failed to get deploy-%d: %v", i, err)
+		}
+		if *d.Spec.Replicas != 0 {
+			t.Errorf("deploy-%d: expected replicas=0 after retry, got %d", i, *d.Spec.Replicas)
+		}
+	}
+
+	// Verify all managed workloads have correct original replicas
+	for _, mw := range persistedSchedule.Status.ManagedWorkloads {
+		if mw.Kind != "Deployment" {
+			t.Errorf("Expected kind=Deployment, got %s", mw.Kind)
+		}
+		if mw.OriginalReplicas == nil || *mw.OriginalReplicas != 3 {
+			t.Errorf("workload %s: expected originalReplicas=3, got %v", mw.Name, mw.OriginalReplicas)
+		}
 	}
 }

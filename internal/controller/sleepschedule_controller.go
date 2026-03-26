@@ -678,8 +678,8 @@ func (r *SleepScheduleReconciler) timeUntilNextTransition(schedule *slumlordv1al
 }
 
 // sleepWorkloads scales down or suspends matched workloads.
-// Status is persisted after each workload type section so that already-scaled
-// workloads are not lost if a later operation encounters a conflict error.
+// Status is persisted after each individual workload update so that
+// already-scaled workloads are not lost if a conflict error occurs mid-loop.
 func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *slumlordv1alpha1.SlumlordSleepSchedule) error {
 	logger := log.FromContext(ctx)
 
@@ -718,7 +718,6 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 			return err
 		}
 
-		changed := false
 		for i := range deployments.Items {
 			deploy := &deployments.Items[i]
 			if managed["Deployment/"+deploy.Name] {
@@ -736,13 +735,11 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 					Name:             deploy.Name,
 					OriginalReplicas: &original,
 				})
-				changed = true
+				if err := r.Status().Update(ctx, schedule); err != nil {
+					return err
+				}
+				managed["Deployment/"+deploy.Name] = true
 				logger.Info("Scaled down deployment", "name", deploy.Name, "originalReplicas", original)
-			}
-		}
-		if changed {
-			if err := r.Status().Update(ctx, schedule); err != nil {
-				return err
 			}
 		}
 	}
@@ -754,7 +751,6 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 			return err
 		}
 
-		changed := false
 		for i := range statefulsets.Items {
 			sts := &statefulsets.Items[i]
 			if managed["StatefulSet/"+sts.Name] {
@@ -772,13 +768,11 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 					Name:             sts.Name,
 					OriginalReplicas: &original,
 				})
-				changed = true
+				if err := r.Status().Update(ctx, schedule); err != nil {
+					return err
+				}
+				managed["StatefulSet/"+sts.Name] = true
 				logger.Info("Scaled down statefulset", "name", sts.Name, "originalReplicas", original)
-			}
-		}
-		if changed {
-			if err := r.Status().Update(ctx, schedule); err != nil {
-				return err
 			}
 		}
 	}
@@ -790,7 +784,6 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 			return err
 		}
 
-		changed := false
 		for i := range cronjobs.Items {
 			cj := &cronjobs.Items[i]
 			if managed["CronJob/"+cj.Name] {
@@ -811,13 +804,11 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 					Name:            cj.Name,
 					OriginalSuspend: &original,
 				})
-				changed = true
+				if err := r.Status().Update(ctx, schedule); err != nil {
+					return err
+				}
+				managed["CronJob/"+cj.Name] = true
 				logger.Info("Suspended cronjob", "name", cj.Name)
-			}
-		}
-		if changed {
-			if err := r.Status().Update(ctx, schedule); err != nil {
-				return err
 			}
 		}
 	}
@@ -838,7 +829,6 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 				return err
 			}
 		} else {
-			changed := false
 			for i := range clusterList.Items {
 				cluster := &clusterList.Items[i]
 				if managed["Cluster/"+cluster.GetName()] {
@@ -865,13 +855,11 @@ func (r *SleepScheduleReconciler) sleepWorkloads(ctx context.Context, schedule *
 						Name:                cluster.GetName(),
 						OriginalHibernation: &originalHibernation,
 					})
-					changed = true
+					if err := r.Status().Update(ctx, schedule); err != nil {
+						return err
+					}
+					managed["Cluster/"+cluster.GetName()] = true
 					logger.Info("Hibernated CNPG cluster", "name", cluster.GetName())
-				}
-			}
-			if changed {
-				if err := r.Status().Update(ctx, schedule); err != nil {
-					return err
 				}
 			}
 		}
@@ -1072,7 +1060,6 @@ func (r *SleepScheduleReconciler) sleepSuspendResources(ctx context.Context, sch
 		return err
 	}
 
-	changed := false
 	for i := range resourceList.Items {
 		resource := &resourceList.Items[i]
 		if alreadyManaged[kind+"/"+resource.GetName()] {
@@ -1101,14 +1088,11 @@ func (r *SleepScheduleReconciler) sleepSuspendResources(ctx context.Context, sch
 				Name:            resource.GetName(),
 				OriginalSuspend: &original,
 			})
-			changed = true
+			if err := r.Status().Update(ctx, schedule); err != nil {
+				return err
+			}
+			alreadyManaged[kind+"/"+resource.GetName()] = true
 			logger.Info("Suspended resource", "kind", kind, "name", resource.GetName())
-		}
-	}
-
-	if changed {
-		if err := r.Status().Update(ctx, schedule); err != nil {
-			return err
 		}
 	}
 
@@ -1162,7 +1146,6 @@ func (r *SleepScheduleReconciler) sleepReplicaResources(ctx context.Context, sch
 		return err
 	}
 
-	changed := false
 	for i := range resourceList.Items {
 		resource := &resourceList.Items[i]
 		if alreadyManaged[kind+"/"+resource.GetName()] {
@@ -1194,14 +1177,11 @@ func (r *SleepScheduleReconciler) sleepReplicaResources(ctx context.Context, sch
 				Name:             resource.GetName(),
 				OriginalReplicas: &original,
 			})
-			changed = true
+			if err := r.Status().Update(ctx, schedule); err != nil {
+				return err
+			}
+			alreadyManaged[kind+"/"+resource.GetName()] = true
 			logger.Info("Scaled down resource", "kind", kind, "name", resource.GetName(), "originalReplicas", original)
-		}
-	}
-
-	if changed {
-		if err := r.Status().Update(ctx, schedule); err != nil {
-			return err
 		}
 	}
 
@@ -1329,7 +1309,6 @@ func (r *SleepScheduleReconciler) sleepCountResources(ctx context.Context, sched
 		return err
 	}
 
-	changed := false
 	for i := range resourceList.Items {
 		resource := &resourceList.Items[i]
 		if alreadyManaged[kind+"/"+resource.GetName()] {
@@ -1361,14 +1340,11 @@ func (r *SleepScheduleReconciler) sleepCountResources(ctx context.Context, sched
 				Name:             resource.GetName(),
 				OriginalReplicas: &original,
 			})
-			changed = true
+			if err := r.Status().Update(ctx, schedule); err != nil {
+				return err
+			}
+			alreadyManaged[kind+"/"+resource.GetName()] = true
 			logger.Info("Scaled down resource", "kind", kind, "name", resource.GetName(), "originalCount", original)
-		}
-	}
-
-	if changed {
-		if err := r.Status().Update(ctx, schedule); err != nil {
-			return err
 		}
 	}
 
@@ -1421,7 +1397,6 @@ func (r *SleepScheduleReconciler) sleepElasticsearchResources(ctx context.Contex
 		return err
 	}
 
-	changed := false
 	for i := range resourceList.Items {
 		resource := &resourceList.Items[i]
 		if alreadyManaged["Elasticsearch/"+resource.GetName()] {
@@ -1487,14 +1462,11 @@ func (r *SleepScheduleReconciler) sleepElasticsearchResources(ctx context.Contex
 			Name:                  resource.GetName(),
 			OriginalNodeSetCounts: &countsStr,
 		})
-		changed = true
-		logger.Info("Scaled down Elasticsearch nodeSets", "name", resource.GetName(), "originalCounts", originalCounts)
-	}
-
-	if changed {
 		if err := r.Status().Update(ctx, schedule); err != nil {
 			return err
 		}
+		alreadyManaged["Elasticsearch/"+resource.GetName()] = true
+		logger.Info("Scaled down Elasticsearch nodeSets", "name", resource.GetName(), "originalCounts", originalCounts)
 	}
 
 	return nil
