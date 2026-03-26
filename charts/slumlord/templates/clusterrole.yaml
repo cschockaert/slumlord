@@ -148,6 +148,7 @@ rules:
   # Events (sleep schedule transitions)
   - apiGroups:
       - ""
+      - events.k8s.io
     resources:
       - events
     verbs:
@@ -269,6 +270,7 @@ rules:
   # Events (drain: emit events)
   - apiGroups:
       - ""
+      - events.k8s.io
     resources:
       - events
     verbs:
