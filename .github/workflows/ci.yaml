@@ -85,7 +85,7 @@ jobs:
         run: go build -v ./cmd/main.go
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
 
       - name: Lint Helm chart
         run: |
