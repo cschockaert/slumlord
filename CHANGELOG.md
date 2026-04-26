@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.3] - 2026-04-26
+
+### Changed
+
+- Bump aquasecurity/trivy-action from 0.35.0 to 0.36.0 (#105)
+- Bump azure/setup-helm from 4 to 5 (#99)
+- Bump codecov/codecov-action from 5 to 6 (#98)
+- Bump softprops/action-gh-release from 2 to 3 (#100)
+
 ## [2.14.2] - 2026-03-26
 
 ### Fixed
@@ -265,7 +274,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.14.2...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.14.3...HEAD
+[2.14.3]: https://github.com/cschockaert/slumlord/compare/v2.14.2...v2.14.3
 [2.14.2]: https://github.com/cschockaert/slumlord/compare/v2.14.1...v2.14.2
 [2.14.1]: https://github.com/cschockaert/slumlord/compare/v2.14.0...v2.14.1
 [2.14.0]: https://github.com/cschockaert/slumlord/compare/v2.13.1...v2.14.0
