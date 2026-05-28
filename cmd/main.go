@@ -38,10 +38,12 @@ func main() {
 	var enableIdleDetector bool
 	var enableBinPacker bool
 	var enableNodeDrain bool
+	var enableAutoSchedulePolicy bool
 	var sleepReconcileInterval time.Duration
 	var idleReconcileInterval time.Duration
 	var binpackerReconcileInterval time.Duration
 	var nodedrainReconcileInterval time.Duration
+	var autoScheduleReconcileInterval time.Duration
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -55,6 +57,8 @@ func main() {
 		"Enable the bin packer controller for node consolidation.")
 	flag.BoolVar(&enableNodeDrain, "enable-node-drain", false,
 		"Enable the node drain policy controller.")
+	flag.BoolVar(&enableAutoSchedulePolicy, "enable-autoschedule-policy", false,
+		"Enable the auto-schedule policy controller (cluster-scoped SleepSchedule fan-out).")
 	flag.DurationVar(&sleepReconcileInterval, "sleep-reconcile-interval", 0,
 		"Override the default reconcile interval for the sleep schedule controller (e.g., 5m, 10m). 0 uses built-in default.")
 	flag.DurationVar(&idleReconcileInterval, "idle-reconcile-interval", 0,
@@ -63,6 +67,8 @@ func main() {
 		"Override the default reconcile interval for the bin packer controller (e.g., 2m, 5m). 0 uses built-in default.")
 	flag.DurationVar(&nodedrainReconcileInterval, "nodedrain-reconcile-interval", 0,
 		"Override the default reconcile interval for the node drain policy controller (e.g., 1m, 5m). 0 uses built-in default.")
+	flag.DurationVar(&autoScheduleReconcileInterval, "autoschedule-reconcile-interval", 0,
+		"Override the default reconcile interval for the auto-schedule policy controller (e.g., 5m, 10m). 0 uses built-in default.")
 
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
@@ -140,6 +146,20 @@ func main() {
 		}
 	} else {
 		setupLog.Info("node drain policy controller disabled")
+	}
+
+	if enableAutoSchedulePolicy {
+		if err = (&controller.AutoSchedulePolicyReconciler{
+			Client:                   mgr.GetClient(),
+			Scheme:                   mgr.GetScheme(),
+			Recorder:                 mgr.GetEventRecorder("slumlord-autoschedule-policy"),
+			DefaultReconcileInterval: autoScheduleReconcileInterval,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "SlumlordAutoSchedulePolicy")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("auto-schedule policy controller disabled")
 	}
 
 	if dashboardAddr != "0" {

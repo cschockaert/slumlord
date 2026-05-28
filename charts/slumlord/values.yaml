@@ -116,6 +116,7 @@ reconcileIntervals:
   idleDetector: ""
   binPacker: ""
   nodeDrain: ""
+  autoSchedulePolicy: ""
 
 # Idle detector feature (experimental, metrics stub)
 idleDetector:
@@ -127,4 +128,11 @@ binPacker:
 
 # Node drain policy for draining underutilized nodes on a cron schedule
 nodeDrain:
+  enabled: false
+
+# Auto-schedule policy: cluster-scoped CRD that fans out SleepSchedules to
+# namespaces matching a label selector. Namespaces opt in by setting
+# `slumlord.io/sleep-profile: <profile>`; the profile name picks one of the
+# profiles declared in the policy's spec.
+autoSchedulePolicy:
   enabled: false
