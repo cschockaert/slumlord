@@ -7,13 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.16.0] - 2026-05-28
+
 ### Added
 
 - `SlumlordAutoSchedulePolicy` cluster-scoped CRD: fan out `SlumlordSleepSchedule` to many namespaces with a single label opt-in (`slumlord.io/sleep-profile: <profile>`) ([#118](https://github.com/cschockaert/slumlord/issues/118))
 - Profile-based templates declared once on the policy; namespace label value picks one
 - Cleanup via finalizer + `slumlord.io/managed-by-policy` label (Kubernetes forbids cross-namespace ownerReferences)
 - Manually-managed `SlumlordSleepSchedule` resources are never touched (conflict surfaced in `status.conflicts`)
-- Multi-policy overlap on the same namespace fails closed and surfaces in `status.conflicts`
+- Multi-policy overlap on the same namespace fails closed; conflict surfaces bidirectionally on every overlapping policy via a peer-policy watch
 - Feature flag `--enable-autoschedule-policy` (off by default)
 - Helm value `autoSchedulePolicy.enabled`
 
@@ -292,7 +294,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.15.0...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.16.0...HEAD
+[2.16.0]: https://github.com/cschockaert/slumlord/compare/v2.15.0...v2.16.0
 [2.15.0]: https://github.com/cschockaert/slumlord/compare/v2.14.3...v2.15.0
 [2.14.3]: https://github.com/cschockaert/slumlord/compare/v2.14.2...v2.14.3
 [2.14.2]: https://github.com/cschockaert/slumlord/compare/v2.14.1...v2.14.2
