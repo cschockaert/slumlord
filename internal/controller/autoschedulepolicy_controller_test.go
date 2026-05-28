@@ -497,3 +497,45 @@ func TestReconcile_SuspendDoesNotTouchSchedules(t *testing.T) {
 		t.Errorf("suspended policy must not overwrite schedule, got Start=%q", ss.Spec.Schedules[0].Start)
 	}
 }
+
+func TestNamespaceToPolicy_FiltersByMatch(t *testing.T) {
+	scheme := newAutoPolicyScheme()
+	matchingPolicy := samplePolicy("matches")
+	otherPolicy := samplePolicy("other")
+	otherPolicy.Spec.NamespaceSelector = &metav1.LabelSelector{
+		MatchLabels: map[string]string{"team": "platform"},
+	}
+	ns := nsWithProfile("acme-prod", "nightly-strict")
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(matchingPolicy, otherPolicy, ns).
+		Build()
+
+	r := newAutoPolicyReconciler(scheme, c)
+	requests := r.namespaceToPolicy(context.Background(), ns)
+	if len(requests) != 1 || requests[0].Name != "matches" {
+		t.Errorf("expected only matching policy to be enqueued, got %+v", requests)
+	}
+}
+
+func TestPeerPolicyToPolicy_EnqueuesAllOthers(t *testing.T) {
+	scheme := newAutoPolicyScheme()
+	a := samplePolicy("a")
+	b := samplePolicy("b")
+	c := samplePolicy("c")
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(a, b, c).Build()
+	r := newAutoPolicyReconciler(scheme, cl)
+	requests := r.peerPolicyToPolicy(context.Background(), a)
+	names := map[string]bool{}
+	for _, req := range requests {
+		names[req.Name] = true
+	}
+	if names["a"] {
+		t.Error("peer mapFunc must not enqueue the triggering policy itself")
+	}
+	if !names["b"] || !names["c"] {
+		t.Errorf("expected peers b and c to be enqueued, got %+v", names)
+	}
+}

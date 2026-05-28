@@ -376,7 +376,8 @@ func intSliceEqual(a, b []int) bool {
 }
 
 // SetupWithManager wires up watches for the policy itself, namespaces (label
-// changes), and SleepSchedule children (drift detection).
+// changes), SleepSchedule children (drift detection), and peer policies (so a
+// new/updated peer that creates an overlap re-reconciles all sides).
 func (r *AutoSchedulePolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&slumlordv1alpha1.SlumlordAutoSchedulePolicy{}).
@@ -389,19 +390,49 @@ func (r *AutoSchedulePolicyReconciler) SetupWithManager(mgr ctrl.Manager) error 
 			&slumlordv1alpha1.SlumlordSleepSchedule{},
 			handler.EnqueueRequestsFromMapFunc(r.sleepScheduleToPolicy),
 		).
+		Watches(
+			&slumlordv1alpha1.SlumlordAutoSchedulePolicy{},
+			handler.EnqueueRequestsFromMapFunc(r.peerPolicyToPolicy),
+		).
 		Complete(r)
 }
 
-// namespaceToPolicy maps a Namespace event to all policies that might match it.
-// We enqueue every policy because the selector itself is what decides matching;
-// the reconcile loop will skip non-matching namespaces.
-func (r *AutoSchedulePolicyReconciler) namespaceToPolicy(ctx context.Context, _ client.Object) []reconcile.Request {
+// namespaceToPolicy maps a Namespace event to the subset of policies whose
+// selector evaluates true for that namespace. Pre-filtering here avoids
+// O(M) reconciles per Namespace event on large clusters.
+func (r *AutoSchedulePolicyReconciler) namespaceToPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
+	ns, ok := obj.(*corev1.Namespace)
+	if !ok {
+		return nil
+	}
 	policies := &slumlordv1alpha1.SlumlordAutoSchedulePolicyList{}
 	if err := r.List(ctx, policies); err != nil {
 		return nil
 	}
 	out := make([]reconcile.Request, 0, len(policies.Items))
 	for i := range policies.Items {
+		matches, err := namespaceMatchesPolicy(&policies.Items[i], ns)
+		if err != nil || !matches {
+			continue
+		}
+		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: policies.Items[i].Name}})
+	}
+	return out
+}
+
+// peerPolicyToPolicy enqueues every OTHER policy when a policy changes. This
+// keeps Status.Conflicts bidirectional: if policy A overlaps with B, both A
+// and B will reconcile and surface the conflict.
+func (r *AutoSchedulePolicyReconciler) peerPolicyToPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
+	policies := &slumlordv1alpha1.SlumlordAutoSchedulePolicyList{}
+	if err := r.List(ctx, policies); err != nil {
+		return nil
+	}
+	out := make([]reconcile.Request, 0, len(policies.Items))
+	for i := range policies.Items {
+		if policies.Items[i].Name == obj.GetName() {
+			continue
+		}
 		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: policies.Items[i].Name}})
 	}
 	return out
