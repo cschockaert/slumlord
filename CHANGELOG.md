@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-05-28
+
+### Changed
+
+- Bump k8s.io/api, k8s.io/apimachinery, k8s.io/client-go, k8s.io/metrics from 0.35.2 to 0.36.1 (#112, #113, #114, #116)
+- Bump sigs.k8s.io/controller-runtime from 0.23.3 to 0.24.1 (#115)
+- Bump Go toolchain from 1.25 to 1.26 (CI workflows and `go.mod`)
+
 ## [2.14.3] - 2026-04-26
 
 ### Changed
@@ -274,7 +282,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controller tests and CI/CD pipeline
 - Timezone-aware scheduling with overnight schedule support
 
-[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.14.3...HEAD
+[Unreleased]: https://github.com/cschockaert/slumlord/compare/v2.15.0...HEAD
+[2.15.0]: https://github.com/cschockaert/slumlord/compare/v2.14.3...v2.15.0
 [2.14.3]: https://github.com/cschockaert/slumlord/compare/v2.14.2...v2.14.3
 [2.14.2]: https://github.com/cschockaert/slumlord/compare/v2.14.1...v2.14.2
 [2.14.1]: https://github.com/cschockaert/slumlord/compare/v2.14.0...v2.14.1
