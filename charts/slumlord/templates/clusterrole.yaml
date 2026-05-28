@@ -348,3 +348,41 @@ rules:
       - list
       - watch
   {{- end }}
+  {{- if .Values.autoSchedulePolicy.enabled }}
+  # SlumlordAutoSchedulePolicy resources (cluster-scoped fan-out of SleepSchedule)
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordautoschedulepolicies
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordautoschedulepolicies/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - slumlord.io
+    resources:
+      - slumlordautoschedulepolicies/finalizers
+    verbs:
+      - update
+  # Namespaces (watch for label changes that trigger profile selection)
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - list
+      - watch
+  {{- end }}
