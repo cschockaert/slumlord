@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SlumlordAutoSchedulePolicy` cluster-scoped CRD: fan out `SlumlordSleepSchedule` to many namespaces with a single label opt-in (`slumlord.io/sleep-profile: <profile>`) ([#118](https://github.com/cschockaert/slumlord/issues/118))
+- Profile-based templates declared once on the policy; namespace label value picks one
+- Cleanup via finalizer + `slumlord.io/managed-by-policy` label (Kubernetes forbids cross-namespace ownerReferences)
+- Manually-managed `SlumlordSleepSchedule` resources are never touched (conflict surfaced in `status.conflicts`)
+- Multi-policy overlap on the same namespace fails closed and surfaces in `status.conflicts`
+- Feature flag `--enable-autoschedule-policy` (off by default)
+- Helm value `autoSchedulePolicy.enabled`
+
 ## [2.15.0] - 2026-05-28
 
 ### Changed

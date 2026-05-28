@@ -15,6 +15,14 @@ Kubernetes operator for cost optimization -- automatically scales down workloads
 - Label selectors and name-based matching (with wildcards)
 - State preservation -- original replica counts, suspend states, and hibernation annotations are stored for restoration
 
+**Auto-schedule Policies** -- cluster-scoped fan-out of SleepSchedules (opt-in alpha, `--enable-autoschedule-policy`):
+- One `SlumlordAutoSchedulePolicy` manages many namespaces at once
+- Namespaces opt in with a single label: `slumlord.io/sleep-profile: <profile-name>`
+- The policy declares named profiles; the label value picks one
+- Generated SleepSchedules are tracked via a `slumlord.io/managed-by-policy` label and cleaned up when the namespace de-selects or the policy is deleted
+- Manually-managed SleepSchedules are never overwritten (conflict surfaced in status)
+- Multi-policy overlap on the same namespace fails closed and surfaces in status
+
 **Idle Detection** -- detect and optionally scale down underutilized workloads:
 - Monitors CPU and memory usage against configurable thresholds
 - Configurable idle duration before action
@@ -269,6 +277,50 @@ spec:
 ```
 
 > **Note**: The `resize` action requires Kubernetes 1.33+ with InPlacePodVerticalScaling feature gate enabled. It patches pod resource requests in-place without restarting pods.
+
+### Auto-schedule policies (cluster-scoped fan-out)
+
+Stop hand-writing one `SlumlordSleepSchedule` per namespace. A single
+cluster-scoped `SlumlordAutoSchedulePolicy` declares named profiles; namespaces
+opt in with a label:
+
+```yaml
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordAutoSchedulePolicy
+metadata:
+  name: default
+spec:
+  profiles:
+    nightly-strict:
+      selector:
+        types: [Deployment, StatefulSet, HelmRelease, Kustomization, Cluster]
+      schedules:
+        - {start: "18:00", end: "08:00", days: [1,2,3,4,5], timezone: Europe/Paris}
+        - {start: "00:00", end: "23:59", days: [0,6],       timezone: Europe/Paris}
+    business-hours:
+      selector:
+        types: [Deployment, StatefulSet]
+      schedules:
+        - {start: "20:00", end: "07:00", days: [1,2,3,4,5], timezone: Europe/Paris}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: acme-prod
+  labels:
+    slumlord.io/sleep-profile: nightly-strict
+```
+
+Enable the controller via `--enable-autoschedule-policy` (Helm:
+`autoSchedulePolicy.enabled=true`). Generated SleepSchedules carry
+`slumlord.io/managed-by-policy: <policy-name>`; list them with:
+
+```sh
+kubectl get slumlordsleepschedules -A -l slumlord.io/managed-by-policy
+```
+
+Manually-managed SleepSchedules sharing the same name as the generated one are
+never touched and are reported in `status.conflicts` on the policy.
 
 ## CRD Reference
 

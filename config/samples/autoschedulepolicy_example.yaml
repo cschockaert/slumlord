@@ -1,0 +1,56 @@
+---
+# A single cluster-scoped policy fans out SleepSchedules into every namespace
+# carrying the label `slumlord.io/sleep-profile: <profile>`. The label value
+# picks one of the named profiles below.
+apiVersion: slumlord.io/v1alpha1
+kind: SlumlordAutoSchedulePolicy
+metadata:
+  name: default
+spec:
+  # Optional: override the default namespaceSelector. When omitted, the policy
+  # uses `matchExpressions: [{key: slumlord.io/sleep-profile, operator: Exists}]`
+  # so only namespaces that explicitly carry the profile label are matched.
+  # Uncomment the snippet below to exclude infra namespaces explicitly:
+  # namespaceSelector:
+  #   matchExpressions:
+  #     - {key: slumlord.io/sleep-profile, operator: Exists}
+  #     - {key: kubernetes.io/metadata.name, operator: NotIn, values: [kube-system, kube-public]}
+
+  profiles:
+    nightly-strict:
+      selector:
+        types:
+          - Deployment
+          - StatefulSet
+          - HelmRelease
+          - Kustomization
+          - Cluster
+      schedules:
+        - start: "18:00"
+          end:   "08:00"
+          days:  [1, 2, 3, 4, 5]
+          timezone: Europe/Paris
+        - start: "00:00"
+          end:   "23:59"
+          days:  [0, 6]
+          timezone: Europe/Paris
+
+    business-hours:
+      selector:
+        types:
+          - Deployment
+          - StatefulSet
+      schedules:
+        - start: "20:00"
+          end:   "07:00"
+          days:  [1, 2, 3, 4, 5]
+          timezone: Europe/Paris
+
+---
+# A namespace opts in + picks a profile via a single label.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: acme-prod
+  labels:
+    slumlord.io/sleep-profile: nightly-strict
